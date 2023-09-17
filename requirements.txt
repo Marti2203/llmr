@@ -1,2 +1,5 @@
-requests=2.28.2
+requests==2.28.2
 openai
+rich
+pytest
+pytest-timeout

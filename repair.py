@@ -11,24 +11,22 @@ from pprint import pprint
 PROMPT = """
 Here is the following file {lang_info} with name {file_name}.
 There is a bug {fault_info}.
-I would like you to repair the file and only respond with a patch in diff format with the file name to be the same as the original but in a different directory.
---- original/{file_name}
-+++ patched/{file_name}
+I would like you to repair the file and respond with a patched version of the file.
 Here is the code:
 
 {program}
 """
 
 
-def send_prompt(text: str, key: str, num=1, temperature=0.8):
+def send_prompt(text: str, key: str, model: str, num=1, temperature=0.8):
     # print(text)
     openai.api_key = key
     return openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
+        model=model,
         messages=[
             {
                 "role": "system",
-                "content": "You are a helpful programming assistant, which repairs programs and outputs the changes in diff format, surrounded by triple backticks (```).",
+                "content": "You are a helpful programming assistant, which repairs programs and outputs the contents of the repaired file, surrounded by triple backticks (```).",
             },
             {"role": "user", "content": text},
         ],
@@ -59,17 +57,19 @@ def execute_command(command: str, show_output=True, env=dict(), directory=None):
         [command], stdout=subprocess.PIPE, shell=True, env=new_env, cwd=directory
     )
     (output, error) = process.communicate()
+    if show_output:
+        print(output)
     # out is the output of the command, and err is the exit value
     return int(process.returncode)
 
 
-def build(build_script):
-    res = execute_command(build_script)
+def build(build_script,debug=False):
+    res = execute_command("./" + build_script,show_output=debug)
     return res == 0
 
 
-def test(test_script):
-    res = execute_command(test_script)
+def test(test_script, args=None,debug=False):
+    res = execute_command("./" + test_script + ' ' + args if args is not None else ' ', show_output=debug)
     return res == 0
 
 
@@ -90,6 +90,14 @@ def parse_args():
     )
 
     optional = parser.add_argument_group("Optional arguments")
+
+    optional.add_argument(
+        "-model",
+        help="OpenAI model to be used",
+        type=str,
+        required=False,
+        default="gpt-4"
+    )
 
     optional.add_argument(
         "-build",
@@ -117,14 +125,17 @@ def parse_args():
 
     optional.add_argument(
         "-test",
-        help="Build script location",
+        help="Test script location",
         type=str,  # argparse.FileType("r"),
         required=False,
     )
+
+    optional.add_argument('-tests',help="Tests", type=str,required=False)
+
     optional.add_argument(
         "-fl", help="Fault localization path", type=argparse.FileType("r")
     )
-    optional.add_argument("-d", "-debug", help="Run in debug mode")
+    optional.add_argument("-d", "--debug", help="Run in debug mode", action="store_true", default=False)
     optional.add_argument("-lang", help="Lanaguage")
     optional.add_argument(
         "-lines",
@@ -163,29 +174,64 @@ def repair(args):
         ),
         key="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",
         num=args.patches,
+        model=args.model,
     )["choices"]
 
     os.makedirs(args.output, exist_ok=True)
 
     for i, resp in enumerate(response):
-        patch_path = os.path.join(args.output, "patch_{}".format(i))
-        patch = resp["message"]["content"].split("```")[1]
-        if patch.startswith("diff\n"):
-            patch = patch[5:]
-        print(patch)
-        with open(patch_path, "w") as f:
-            f.write(patch)
+        print("\n\nProcessing response {}\n\n".format(i))
+        if args.debug:
+            with open(os.path.join(args.output, "response_{}.txt".format(i)),"w") as f:
+                f.write(resp["message"]["content"])
+            print(resp["message"]["content"])
+        patched_path = os.path.join(args.output, "patched_{}_{}".format(i,os.path.basename(args.file)))
+        if '```' not in resp["message"]["content"]:
+            print("Skipping output {}".format(i))
+            continue
+        patched_file = resp["message"]["content"].split("```")[1]
+        if args.lang and patched_file.startswith(args.lang):
+            patched_file = patched_file[len(args.lang):]
+        if patched_file.startswith('\n'):
+            patched_file = patched_file[1:]
+        print(patched_file)
+        with open(patched_path, "w") as f:
+            f.write(patched_file)
         # build
-        if not apply_patch(args.file, patch_path):
-            print("FAILED TO PATCH")
-        if args.build:
-            if build(args.build):
-                print("Patch {} Compiles".format(i))
-        # test
-        if args.test:
-            if test(args.test):
-                print("Patch {} is Plausible".format(i))
-
-
+        #if not apply_patch(args.file, patch_path):
+        #    print("FAILED TO PATCH")
+        try:
+            with open(args.file,'w') as f:
+                f.write(patched_file)
+            built = False
+            if args.build:
+                if build(args.build,args.debug):
+                    built=True
+                    print("Patch {} Compiles".format(i))
+                else:
+                    print("Patch {} does not compile".format(i))
+                    shutil.move(patched_path,patched_path+'_noncompiling')
+            else:
+                built = True
+            if built and args.test:
+                plausible = True
+                if args.tests:
+                    for test_id in args.tests.split(','):
+                        if not test(args.test,test_id,args.debug):
+                            print("Patch {} failed for test {}".format(i,test_id))
+                            shutil.move(patched_path,patched_path+'_implausible')
+                            plausible=False
+                            break
+                else:
+                    if not test(args.test,None,args.debug):
+                        print("Patch {} failed test script".format(i))
+                        plausible = False
+                        shutil.move(patched_path,patched_path+'_implausible')
+                if plausible:
+                    print("Patch {} is Plausible".format(i))
+                    shutil.move(patched_path,patched_path+'_plausible')
+        finally:
+            with open(args.file,'w') as f:
+                f.write(file_contents)
 if __name__ == "__main__":
     repair(parse_args())
