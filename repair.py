@@ -97,6 +97,14 @@ def parse_args():
     optional = parser.add_argument_group("Optional arguments")
 
     optional.add_argument(
+        "-iterations",
+        help="Amount of iterations for a self-consistency check",
+        type=int,
+        required=False,
+        default=1,
+    )
+
+    optional.add_argument(
         "-model",
         help="OpenAI model to be used",
         type=str,
@@ -172,76 +180,80 @@ def repair(args):
             )
         bug_info = "in any of the lines in the list {}".format(",".join(fl_info))
 
-    response = send_prompt(
-        PROMPT.format(
-            lang_info=lang_info,
-            file_name=os.path.basename(args.file),
-            program=file_contents,
-            fault_info=bug_info,
-        ),
-        key="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",
-        num=args.patches,
-        model=args.model,
-    )["choices"]
-
+    i = 0
     os.makedirs(args.output, exist_ok=True)
+    for iteration in range(args.iterations):
+        response = send_prompt(
+            PROMPT.format(
+                lang_info=lang_info,
+                file_name=os.path.basename(args.file),
+                program=file_contents,
+                fault_info=bug_info,
+            ),
+            key="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",
+            num=args.patches,
+            model=args.model,
+        )["choices"]
+        for resp in response:
 
-    for i, resp in enumerate(response):
-        print("\n\nProcessing response {}\n\n".format(i))
-        if args.debug:
-            with open(os.path.join(args.output, "response_{}.txt".format(i)), "w") as f:
-                f.write(resp["message"]["content"])
-            print(resp["message"]["content"])
-        patched_path = os.path.join(
-            args.output, "patched_{}_{}".format(i, os.path.basename(args.file))
-        )
-        if "```" not in resp["message"]["content"]:
-            print("Skipping output {}".format(i))
-            continue
-        patched_file = resp["message"]["content"].split("```")[1]
-        if args.lang and patched_file.startswith(args.lang):
-            patched_file = patched_file[len(args.lang) :]
-        if patched_file.startswith("\n"):
-            patched_file = patched_file[1:]
-        print(patched_file)
-        with open(patched_path, "w") as f:
-            f.write(patched_file)
-        # build
-        # if not apply_patch(args.file, patch_path):
-        #    print("FAILED TO PATCH")
-        try:
-            with open(args.file, "w") as f:
+            print("\n\nProcessing response {}\n\n".format(i))
+            if args.debug:
+                with open(
+                    os.path.join(args.output, "response_{}.txt".format(i)), "w"
+                ) as f:
+                    f.write(resp["message"]["content"])
+                print(resp["message"]["content"])
+            patched_path = os.path.join(
+                args.output, "patched_{}_{}".format(i, os.path.basename(args.file))
+            )
+            if "```" not in resp["message"]["content"]:
+                print("Skipping output {}".format(i))
+                continue
+            patched_file = resp["message"]["content"].split("```")[1]
+            if args.lang and patched_file.startswith(args.lang):
+                patched_file = patched_file[len(args.lang) :]
+            if patched_file.startswith("\n"):
+                patched_file = patched_file[1:]
+            print(patched_file)
+            with open(patched_path, "w") as f:
                 f.write(patched_file)
-            built = False
-            if args.build:
-                if build(args.build, args.debug):
+            # build
+            # if not apply_patch(args.file, patch_path):
+            #    print("FAILED TO PATCH")
+            try:
+                with open(args.file, "w") as f:
+                    f.write(patched_file)
+                built = False
+                if args.build:
+                    if build(args.build, args.debug):
+                        built = True
+                        print("Patch {} Compiles".format(i))
+                    else:
+                        print("Patch {} does not compile".format(i))
+                        shutil.move(patched_path, patched_path + "_noncompiling")
+                else:
                     built = True
-                    print("Patch {} Compiles".format(i))
-                else:
-                    print("Patch {} does not compile".format(i))
-                    shutil.move(patched_path, patched_path + "_noncompiling")
-            else:
-                built = True
-            if built and args.test:
-                plausible = True
-                if args.tests:
-                    for test_id in args.tests.split(","):
-                        if not test(args.test, test_id, args.debug):
-                            print("Patch {} failed for test {}".format(i, test_id))
-                            shutil.move(patched_path, patched_path + "_implausible")
+                if built and args.test:
+                    plausible = True
+                    if args.tests:
+                        for test_id in args.tests.split(","):
+                            if not test(args.test, test_id, args.debug):
+                                print("Patch {} failed for test {}".format(i, test_id))
+                                shutil.move(patched_path, patched_path + "_implausible")
+                                plausible = False
+                                break
+                    else:
+                        if not test(args.test, None, args.debug):
+                            print("Patch {} failed test script".format(i))
                             plausible = False
-                            break
-                else:
-                    if not test(args.test, None, args.debug):
-                        print("Patch {} failed test script".format(i))
-                        plausible = False
-                        shutil.move(patched_path, patched_path + "_implausible")
-                if plausible:
-                    print("Patch {} is Plausible".format(i))
-                    shutil.move(patched_path, patched_path + "_plausible")
-        finally:
-            with open(args.file, "w") as f:
-                f.write(file_contents)
+                            shutil.move(patched_path, patched_path + "_implausible")
+                    if plausible:
+                        print("Patch {} is Plausible".format(i))
+                        shutil.move(patched_path, patched_path + "_plausible")
+            finally:
+                with open(args.file, "w") as f:
+                    f.write(file_contents)
+            i = i + 1
 
 
 if __name__ == "__main__":
