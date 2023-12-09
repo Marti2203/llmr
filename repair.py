@@ -6,7 +6,9 @@ import os.path
 import shutil
 import requests
 import subprocess
-import openai
+from openai import OpenAI
+
+client = OpenAI(api_key=key)
 from pprint import pprint
 
 PROMPT = """
@@ -24,7 +26,6 @@ def send_prompt(
     bug_description=None
 ):
     # print(text)
-    openai.api_key = key
 
     messages = [
         {
@@ -50,14 +51,12 @@ def send_prompt(
             },
         )
 
-    return openai.ChatCompletion.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=16000,
-        top_p=1.0,
-        n=num,
-    )
+    return client.chat.completions.create(model=model,
+    messages=messages,
+    temperature=temperature,
+    max_tokens=16000,
+    top_p=1.0,
+    n=num)
 
 
 file_error_log = "error.logs"
