@@ -59,7 +59,7 @@ class LLMR(AbstractRepairTool):
             reference_file="-reference {}".format(bug_info[definitions.KEY_REFERENCE_FILE])
             if definitions.KEY_REFERENCE_FILE in bug_info
             else "",
-            bug_description="-description {}".format(bug_info["bug_description"])
+            bug_description="-description {}".format(join(self.dir_setup,bug_info["bug_description"]))
             if "bug_description" in bug_info
             else "",
             language="-lang {}".format(bug_info[self.key_language])
