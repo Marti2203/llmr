@@ -31,6 +31,14 @@ class LLMR(AbstractRepairTool):
             [*bug_info[self.key_failing_tests], *bug_info[self.key_passing_tests]]
         )
         self.run_command("mkdir -p {}".format(join(self.dir_output, "patches")))
+        
+        file = bug_info[self.key_fix_file]
+
+        if bug_info[self.key_language] == "java" and not file.endswith('.java'):
+            file = f"src/main/java/{file.replace('.', '/')}.java"
+
+        self.emit_debug("LLMR will work on file {}".format(file))
+        
         # start running
         self.timestamp_log_start()
         llmr_command = "timeout -k 5m {timeout_h}h python3 /tool/repair.py -model {model} -file {file} {reference_file} {bug_description} {build_script} -output {output_loc} -patches {patch_count} -test {test_script} {tests} {debug} {language}".format(
@@ -44,7 +52,7 @@ class LLMR(AbstractRepairTool):
             else "",
             output_loc=self.dir_output,
             test_script=join(self.dir_setup,bug_info[self.key_test_script]),
-            file=bug_info[self.key_fix_file],
+            file=file,
             model=model,
             tests="-tests {}".format(tests) if tests != "" else " ",
             debug="-d" if self.is_debug else "",
