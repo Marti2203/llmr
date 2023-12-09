@@ -22,7 +22,7 @@ Here is the code:
 
 
 def send_prompt(
-    text: str, key: str, model: str, num=1, temperature=0.8, reference=None,
+    text: str, model: str, num=1, temperature=0.8, reference=None,
     bug_description=None
 ):
     # print(text)
@@ -54,7 +54,7 @@ def send_prompt(
     return client.chat.completions.create(model=model,
     messages=messages,
     temperature=temperature,
-    max_tokens=16000,
+    max_tokens=2048,
     top_p=1.0,
     n=num)
 
@@ -240,12 +240,11 @@ def repair(args):
                 program=file_contents,
                 fault_info=bug_info,
             ),
-            key="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",
             num=args.patches,
             model=args.model,
             reference=reference_contents,
             bug_description=description_contents,
-        )["choices"]
+        ).choices
         for resp in response:
             print("\n\nProcessing response {}\n\n".format(i))
             try:
@@ -259,15 +258,15 @@ def repair(args):
 def process_response(resp, args, i):
     if args.debug:
         with open(os.path.join(args.output, "response_{}.txt".format(i)), "w") as f:
-            f.write(resp["message"]["content"])
+            f.write(resp.message.content)
         print(resp["message"]["content"])
     patched_path = os.path.join(
         args.output, "patched_{}_{}".format(i, os.path.basename(args.file))
     )
-    if "```" not in resp["message"]["content"]:
+    if "```" not in resp.message.content:
         print("Skipping output {} due to missing concrete patch".format(i))
         return
-    patched_file = resp["message"]["content"].split("```")[1]
+    patched_file = resp.message.content.split("```")[1]
     if args.lang and patched_file.startswith(args.lang):
         patched_file = patched_file[len(args.lang) :]
     if patched_file.startswith("\n"):
