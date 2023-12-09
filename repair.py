@@ -259,7 +259,7 @@ def process_response(resp, args, i):
     if args.debug:
         with open(os.path.join(args.output, "response_{}.txt".format(i)), "w") as f:
             f.write(resp.message.content)
-        print(resp["message"]["content"])
+        print(resp.message.content)
     patched_path = os.path.join(
         args.output, "patched_{}_{}".format(i, os.path.basename(args.file))
     )
