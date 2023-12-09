@@ -42,7 +42,7 @@ class LLMR(AbstractRepairTool):
                 and bug_info[self.key_build_script] != ""
             )
             else "",
-            output_loc=join(self.dir_output, "patches"),
+            output_loc=self.dir_output,
             test_script=join(self.dir_setup,bug_info[self.key_test_script]),
             file=bug_info[self.key_fix_file],
             model=model,
@@ -51,8 +51,8 @@ class LLMR(AbstractRepairTool):
             reference_file="-reference {}".format(bug_info[definitions.KEY_REFERENCE_FILE])
             if definitions.KEY_REFERENCE_FILE in bug_info
             else "",
-            bug_description="-description {}".format(bug_info[definitions.KEY_BUG_DESCRIPTION])
-            if definitions.KEY_BUG_DESCRIPTION in bug_info
+            bug_description="-description {}".format(bug_info["bug_description"])
+            if "bug_description" in bug_info
             else "",
             language="-lang {}".format(bug_info[self.key_language])
             if self.key_language in bug_info

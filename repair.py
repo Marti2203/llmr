@@ -256,10 +256,10 @@ def repair(args):
 
 
 def process_response(resp, args, i):
-    if args.debug:
-        with open(os.path.join(args.output, "response_{}.txt".format(i)), "w") as f:
-            f.write(resp.message.content)
-        print(resp.message.content)
+    with open(os.path.join(args.output, "response_{}.txt".format(i)), "w") as f:
+        f.write(resp.message.content)
+    # if args.debug:
+    #    print(resp.message.content)
     patched_path = os.path.join(
         args.output, "patched_{}_{}".format(i, os.path.basename(args.file))
     )
@@ -271,9 +271,11 @@ def process_response(resp, args, i):
         patched_file = patched_file[len(args.lang) :]
     if patched_file.startswith("\n"):
         patched_file = patched_file[1:]
-    print(patched_file)
+    # print(patched_file)
     with open(patched_path, "w") as f:
         f.write(patched_file)
+    os.makedirs(os.path.join(args.output, "patches"), exist_ok=True)
+    os.system(f"diff {args.file} {patched_path} > {args.output}/patches/patch_{i}.diff")
     # build
     # if not apply_patch(args.file, patch_path):
     #    print("FAILED TO PATCH")
