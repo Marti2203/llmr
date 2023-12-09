@@ -4,6 +4,7 @@ from os.path import join
 from app.core import definitions
 from app.drivers.tools.repair.AbstractRepairTool import AbstractRepairTool
 
+
 class LLMR(AbstractRepairTool):
     def __init__(self):
         self.name = os.path.basename(__file__)[:-3].lower()
@@ -21,10 +22,10 @@ class LLMR(AbstractRepairTool):
 
         timeout_h = str(repair_config_info[self.key_timeout])
         # Any communication based model works
-        model = repair_config_info.get(self.key_tool_params, "gpt-3.5-turbo")
+        model = repair_config_info.get(self.key_tool_params, "gpt-4")
 
         if model == "":
-            model = "gpt-3.5-turbo"
+            model = "gpt-4"
 
         tests = ",".join(
             [*bug_info[self.key_failing_tests], *bug_info[self.key_passing_tests]]
@@ -35,14 +36,14 @@ class LLMR(AbstractRepairTool):
         llmr_command = "timeout -k 5m {timeout_h}h python3 /tool/repair.py -model {model} -file {file} {reference_file} {bug_description} {build_script} -output {output_loc} -patches {patch_count} -test {test_script} {tests} {debug} {language}".format(
             timeout_h=timeout_h,
             patch_count=5,
-            build_script="-build {}".format(bug_info[self.key_build_script])
+            build_script="-build {}".format(join(self.dir_setup,bug_info[self.key_build_script]))
             if (
                 self.key_build_script in bug_info
                 and bug_info[self.key_build_script] != ""
             )
             else "",
             output_loc=join(self.dir_output, "patches"),
-            test_script=bug_info[self.key_test_script],
+            test_script=join(self.dir_setup,bug_info[self.key_test_script]),
             file=bug_info[self.key_fix_file],
             model=model,
             tests="-tests {}".format(tests) if tests != "" else " ",
