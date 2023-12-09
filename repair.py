@@ -8,7 +8,7 @@ import requests
 import subprocess
 from openai import OpenAI
 
-client = OpenAI(api_key=key)
+client = OpenAI(api_key="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")
 from pprint import pprint
 
 PROMPT = """
