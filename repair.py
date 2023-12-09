@@ -19,20 +19,42 @@ Here is the code:
 """
 
 
-def send_prompt(text: str, key: str, model: str, num=1, temperature=0.8):
+def send_prompt(
+    text: str, key: str, model: str, num=1, temperature=0.8, reference=None,
+    bug_description=None
+):
     # print(text)
     openai.api_key = key
-    return openai.ChatCompletion.create(
-        model=model,
-        messages=[
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful programming assistant, which repairs programs and outputs the contents of the repaired file, surrounded by triple backticks (```).",
+        },
+        {"role": "user", "content": text},
+    ]
+    if reference:
+        messages.insert(
+            1,
             {
                 "role": "system",
-                "content": "You are a helpful programming assistant, which repairs programs and outputs the contents of the repaired file, surrounded by triple backticks (```).",
+                "content": f"This is the reference file, which you can use as a solution to help you repair:\n {reference}",
             },
-            {"role": "user", "content": text},
-        ],
+        )
+    if bug_description:
+        messages.insert(
+            1,
+            {
+                "role": "system",
+                "content": f"This is the description of the bug, your goal is to satisfy it:\n {bug_description}",
+            },
+        )
+
+    return openai.ChatCompletion.create(
+        model=model,
+        messages=messages,
         temperature=temperature,
-        max_tokens=2048,
+        max_tokens=16000,
         top_p=1.0,
         n=num,
     )
@@ -65,13 +87,13 @@ def execute_command(command: str, show_output=True, env=dict(), directory=None):
 
 
 def build(build_script, debug=False):
-    res = execute_command("./" + build_script, show_output=debug)
+    res = execute_command(build_script, show_output=debug)
     return res == 0
 
 
 def test(test_script, args=None, debug=False):
     res = execute_command(
-        "./" + test_script + " " + args if args is not None else " ", show_output=debug
+        test_script + " " + args if args is not None else " ", show_output=debug
     )
     return res == 0
 
@@ -109,7 +131,7 @@ def parse_args():
         help="OpenAI model to be used",
         type=str,
         required=False,
-        default="gpt-4",
+        default="gpt-4-32k",
     )
 
     optional.add_argument(
@@ -129,6 +151,14 @@ def parse_args():
     )
 
     optional.add_argument(
+        "-description",
+        help="Description of the bug",
+        type=str,
+        required=False,
+        default=None,
+    )
+
+    optional.add_argument(
         "-patches",
         help="Amount of generated patches",
         type=int,
@@ -141,6 +171,14 @@ def parse_args():
         help="Test script location",
         type=str,  # argparse.FileType("r"),
         required=False,
+    )
+
+    #optional.add_argument(
+    #    "-context", help="Context Window size", type=int, required=False, default=-1
+    #)
+
+    optional.add_argument(
+        "-reference", help="Reference file", type=str, required=False, default=None
     )
 
     optional.add_argument("-tests", help="Tests", type=str, required=False)
@@ -180,9 +218,22 @@ def repair(args):
             )
         bug_info = "in any of the lines in the list {}".format(",".join(fl_info))
 
-    i = 0
     os.makedirs(args.output, exist_ok=True)
+
+    reference_contents = None
+    description_contents = None
+
+    if args.reference:
+        with open(args.reference) as f:
+            reference_contents = f.read()
+
+    if args.description:
+        with open(args.description) as f:
+            description_contents = f.read()
+
+    i = 0
     for iteration in range(args.iterations):
+        print("\n\nIteration {}\n\n".format(iteration))
         response = send_prompt(
             PROMPT.format(
                 lang_info=lang_info,
@@ -193,67 +244,70 @@ def repair(args):
             key="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",
             num=args.patches,
             model=args.model,
+            reference=reference_contents,
+            bug_description=description_contents,
         )["choices"]
         for resp in response:
-
             print("\n\nProcessing response {}\n\n".format(i))
-            if args.debug:
-                with open(
-                    os.path.join(args.output, "response_{}.txt".format(i)), "w"
-                ) as f:
-                    f.write(resp["message"]["content"])
-                print(resp["message"]["content"])
-            patched_path = os.path.join(
-                args.output, "patched_{}_{}".format(i, os.path.basename(args.file))
-            )
-            if "```" not in resp["message"]["content"]:
-                print("Skipping output {}".format(i))
-                continue
-            patched_file = resp["message"]["content"].split("```")[1]
-            if args.lang and patched_file.startswith(args.lang):
-                patched_file = patched_file[len(args.lang) :]
-            if patched_file.startswith("\n"):
-                patched_file = patched_file[1:]
-            print(patched_file)
-            with open(patched_path, "w") as f:
-                f.write(patched_file)
-            # build
-            # if not apply_patch(args.file, patch_path):
-            #    print("FAILED TO PATCH")
             try:
-                with open(args.file, "w") as f:
-                    f.write(patched_file)
-                built = False
-                if args.build:
-                    if build(args.build, args.debug):
-                        built = True
-                        print("Patch {} Compiles".format(i))
-                    else:
-                        print("Patch {} does not compile".format(i))
-                        shutil.move(patched_path, patched_path + "_noncompiling")
-                else:
-                    built = True
-                if built and args.test:
-                    plausible = True
-                    if args.tests:
-                        for test_id in args.tests.split(","):
-                            if not test(args.test, test_id, args.debug):
-                                print("Patch {} failed for test {}".format(i, test_id))
-                                shutil.move(patched_path, patched_path + "_implausible")
-                                plausible = False
-                                break
-                    else:
-                        if not test(args.test, None, args.debug):
-                            print("Patch {} failed test script".format(i))
-                            plausible = False
-                            shutil.move(patched_path, patched_path + "_implausible")
-                    if plausible:
-                        print("Patch {} is Plausible".format(i))
-                        shutil.move(patched_path, patched_path + "_plausible")
+                process_response(resp, args, i)
             finally:
                 with open(args.file, "w") as f:
                     f.write(file_contents)
             i = i + 1
+
+
+def process_response(resp, args, i):
+    if args.debug:
+        with open(os.path.join(args.output, "response_{}.txt".format(i)), "w") as f:
+            f.write(resp["message"]["content"])
+        print(resp["message"]["content"])
+    patched_path = os.path.join(
+        args.output, "patched_{}_{}".format(i, os.path.basename(args.file))
+    )
+    if "```" not in resp["message"]["content"]:
+        print("Skipping output {} due to missing concrete patch".format(i))
+        return
+    patched_file = resp["message"]["content"].split("```")[1]
+    if args.lang and patched_file.startswith(args.lang):
+        patched_file = patched_file[len(args.lang) :]
+    if patched_file.startswith("\n"):
+        patched_file = patched_file[1:]
+    print(patched_file)
+    with open(patched_path, "w") as f:
+        f.write(patched_file)
+    # build
+    # if not apply_patch(args.file, patch_path):
+    #    print("FAILED TO PATCH")
+    with open(args.file, "w") as f:
+        f.write(patched_file)
+    built = False
+    if args.build:
+        if build(args.build, args.debug):
+            built = True
+            print("Patch {} Compiles".format(i))
+        else:
+            print("Patch {} does not compile".format(i))
+            shutil.move(patched_path, patched_path + "_noncompiling")
+    else:
+        built = True
+    if built and args.test:
+        plausible = True
+        if args.tests:
+            for test_id in args.tests.split(","):
+                if not test(args.test, test_id, args.debug):
+                    print("Patch {} failed for test {}".format(i, test_id))
+                    shutil.move(patched_path, patched_path + "_implausible")
+                    plausible = False
+                    break
+        else:
+            if not test(args.test, None, args.debug):
+                print("Patch {} failed test script".format(i))
+                plausible = False
+                shutil.move(patched_path, patched_path + "_implausible")
+        if plausible:
+            print("Patch {} is Plausible".format(i))
+            shutil.move(patched_path, patched_path + "_plausible")
 
 
 if __name__ == "__main__":
