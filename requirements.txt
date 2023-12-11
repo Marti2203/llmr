@@ -3,3 +3,4 @@ openai
 rich
 pytest
 pytest-timeout
+fauxpy

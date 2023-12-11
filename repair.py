@@ -7,6 +7,8 @@ import shutil
 import requests
 import subprocess
 from openai import OpenAI
+from os.path import join
+import json
 
 client = OpenAI(api_key="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")
 from pprint import pprint
@@ -20,11 +22,13 @@ Here is the code:
 {program}
 """
 
+prompt_number = 0 
 
 def send_prompt(
-    text: str, model: str, num=1, temperature=0.8, reference=None,
+    args, text: str, model: str, num=1, temperature=0.8, reference=None,
     bug_description=None
 ):
+    global prompt_number
     # print(text)
 
     messages = [
@@ -50,6 +54,11 @@ def send_prompt(
                 "content": f"This is the description of the bug, your goal is to satisfy it:\n {bug_description}",
             },
         )
+
+    prompt_number += 1
+    if args.debug:
+        with(open(join(args.output, "prompt_{}.json".format(prompt_number)), "w")) as f:
+            json.dump(messages, f, indent=4)
 
     return client.chat.completions.create(model=model,
     messages=messages,
@@ -107,15 +116,8 @@ def apply_patch(file, patch_path):
 def parse_args():
     parser = argparse.ArgumentParser(prog="flem", usage="%(prog)s [options]")
     parser._action_groups.pop()
-    required = parser.add_argument_group("Required arguments")
-    required.add_argument(
-        "-file",
-        help="Location of faulty file",
-        type=str,  # argparse.FileType("r"),
-        required=True,
-    )
 
-    optional = parser.add_argument_group("Optional arguments")
+    optional = parser.add_argument_group("Arguments")
 
     optional.add_argument(
         "-iterations",
@@ -159,10 +161,18 @@ def parse_args():
 
     optional.add_argument(
         "-patches",
-        help="Amount of generated patches",
+        help="Amount of generated patches by model",
         type=int,
         required=False,
         default=1,
+    )
+
+    optional.add_argument(
+        "-top",
+        help="Top k patches to be selected",
+        type=int,
+        required=False,
+        default=5,
     )
 
     optional.add_argument(
@@ -185,10 +195,30 @@ def parse_args():
     optional.add_argument(
         "-fl", help="Fault localization path", type=argparse.FileType("r")
     )
+
+
+
+    optional.add_argument(
+        "-do-fl", help="Whether to do fault localization", action="store_true",default=False
+    )
+
+    optional.add_argument("-fl-formula",help="Fault localization formula", type=str, default="Ochiai")
+
+    optional.add_argument(
+        "--project-path", help="Project path", type=str, required=False, default=None
+    )
+
+    optional.add_argument(
+        "-file",
+        help="Location of faulty file",
+        type=str,
+        required=False,
+    )
+
     optional.add_argument(
         "-d", "--debug", help="Run in debug mode", action="store_true", default=False
     )
-    optional.add_argument("-lang", help="Lanaguage")
+    optional.add_argument("-lang", "--language", help="Lanaguage")
     optional.add_argument(
         "-lines",
         help="Whether to write down the specific lines. This works only if there is fault localization given.",
@@ -199,23 +229,12 @@ def parse_args():
     return parser.parse_args()
 
 
-def repair(args):
+def repair(args,file,fault_info):
     lang_info = "in the {} programming language".format(
-        args.lang if args.lang else args.file.split(".")[-1]
+        args.language if args.language else file(".")[-1]
     )
-    bug_info = "in the file"
-    if not os.path.exists(args.file):
-        print("FILE DOES NOT EXIST")
-        sys.exit(1)
-    with open(args.file) as f:
+    with open(file) as f:
         file_contents = f.read()
-    if args.fl:
-        fl_info = list(map(lambda line: line.split("@")[-1], args.fl.readlines()))
-        if args.lines:
-            fl_info = list(
-                map(lambda line: "`" + file_contents[line - 1] + "`", fl_info)
-            )
-        bug_info = "in any of the lines in the list {}".format(",".join(fl_info))
 
     os.makedirs(args.output, exist_ok=True)
 
@@ -234,11 +253,12 @@ def repair(args):
     for iteration in range(args.iterations):
         print("\n\nIteration {}\n\n".format(iteration))
         response = send_prompt(
+            args,
             PROMPT.format(
                 lang_info=lang_info,
-                file_name=os.path.basename(args.file),
+                file_name=os.path.basename(file),
                 program=file_contents,
-                fault_info=bug_info,
+                fault_info=fault_info,
             ),
             num=args.patches,
             model=args.model,
@@ -248,38 +268,38 @@ def repair(args):
         for resp in response:
             print("\n\nProcessing response {}\n\n".format(i))
             try:
-                process_response(resp, args, i)
+                process_response(resp, file, args, i)
             finally:
-                with open(args.file, "w") as f:
+                with open(file, "w") as f:
                     f.write(file_contents)
             i = i + 1
 
 
-def process_response(resp, args, i):
+def process_response(resp,file, args, i):
     with open(os.path.join(args.output, "response_{}.txt".format(i)), "w") as f:
         f.write(resp.message.content)
     # if args.debug:
     #    print(resp.message.content)
     patched_path = os.path.join(
-        args.output, "patched_{}_{}".format(i, os.path.basename(args.file))
+        args.output, "patched_{}_{}".format(i, os.path.basename(file))
     )
     if "```" not in resp.message.content:
         print("Skipping output {} due to missing concrete patch".format(i))
         return
     patched_file = resp.message.content.split("```")[1]
-    if args.lang and patched_file.startswith(args.lang):
-        patched_file = patched_file[len(args.lang) :]
+    if args.language and patched_file.startswith(args.language):
+        patched_file = patched_file[len(args.language) :]
     if patched_file.startswith("\n"):
         patched_file = patched_file[1:]
     # print(patched_file)
     with open(patched_path, "w") as f:
         f.write(patched_file)
     os.makedirs(os.path.join(args.output, "patches"), exist_ok=True)
-    os.system(f"diff {args.file} {patched_path} > {args.output}/patches/patch_{i}.diff")
+    os.system(f"diff -u {file} {patched_path} > {args.output}/patches/patch_{i}.diff")
     # build
-    # if not apply_patch(args.file, patch_path):
+    # if not apply_patch(file, patch_path):
     #    print("FAILED TO PATCH")
-    with open(args.file, "w") as f:
+    with open(file, "w") as f:
         f.write(patched_file)
     built = False
     if args.build:
@@ -310,5 +330,82 @@ def process_response(resp, args, i):
             shutil.move(patched_path, patched_path + "_plausible")
 
 
+def fault_localization(args):
+    if args.language.startswith("py"):
+        execute_command("python3 -m pytest --src . --family sbfl --exclude \"[$(ls | grep test | grep .py | tr '\n' ',' | sed 's/,$//')]\"",directory=args.project_path)
+        report_dir = os.path.dirname(args.project_path)
+        for dir in os.listdir(report_dir):
+            if dir.startswith("FauxPyReport"):
+                if not os.path.exists(join(report_dir ,dir, 'Scores_{}.csv'.format(args.fl_formula) )):
+                    print("Fault localization report for formula {} does not exist".format(args.fl_formula))
+                    exit(1)
+                with open(join(report_dir ,dir, 'Scores_{}.csv'.format(args.fl_formula) )) as f:
+                    distribution = {}
+                    for line in f.readlines()[1:]:
+                        #print(line)
+                        path,line_and_probability = line.split('::')
+                        line,_ = line_and_probability.split(',')
+                        distribution[path] = distribution.get(path,[]) + [line]
+                    return process_distribution(args, distribution)
+    elif args.language.startswith("c"):
+        pass
+    elif args.language.startswith("java"):
+        execute_command("java -cp '/flacoco/target/flacoco-1.0.7-SNAPSHOT-jar-with-dependencies.jar' fr.spoonlabs.flacoco.cli.FlacocoMain --projectpath {} -o flacoco.run".format(args.project_path),directory=args.project_path)
+        with open(join(args.project_path,'flacoco.run')) as f:
+            distribution = {}
+            for line in f.readlines():
+                path,line,_= line.split(',')
+                path = join(args.project_path,'src','main','java',path.replace('.','/') + '.java')
+                distribution[path] = distribution.get(path,[]) + [line]
+            return process_distribution(args, distribution)
+    else:
+        print("Unsupported language {}".format(args.language))
+        exit(1)
+
+def process_distribution(args, distribution):
+    distribution_converted = []
+    for k,v in distribution.items():
+        if args.lines:
+            with open(k) as f:
+                lines = f.readlines()
+                distribution_converted.append((k,'in any of the lines in the list [{}]'.format(','.join(list(map(lambda x: lines[int(x)-1],v))))))
+        else:
+            distribution_converted.append((k,'in any of the lines in the list {}'.format(','.join(v))))
+    return distribution_converted
+
+def get_bug_info(args):
+    if args.do_fl:
+        print("doing FL")
+        required_args = [ ('language',args.language),('project path',args.project_path),('test_script',args.test)]
+        for _,val in required_args:
+            if not val:
+                print(f"Please provide {list(map(lambda x: x[0],required_args))} if you want fault localization")
+                exit(1)
+        return fault_localization(args)
+    elif args.fl:
+        print("Provided Fault localization is not supported currently")
+        sys.exit(1)
+        #fl_info = list(map(lambda line: line.split("@")[-1], args.fl.readlines()))
+        #if args.lines:
+        #    fl_info = list(
+        #        map(lambda line: "`" + file_contents[line - 1] + "`", fl_info)
+        #    )
+        #bug_info = "in any of the lines in the list {}".format(",".join(fl_info))
+    elif args.file:
+        return [(args.file,"in the file ")]
+    else:
+        print("Please provide a way to find the file to repair - either fault localization (manual, provided) or file path")
+        sys.exit(1)
+
 if __name__ == "__main__":
-    repair(parse_args())
+    args = parse_args()
+    print(args)
+
+    if args.file and not os.path.exists(args.file):
+        print("FILE {} DOES NOT EXIST".format(args.file))
+        sys.exit(1)
+
+    cases = get_bug_info(args)
+
+    for file_path, fault_info in cases:
+        repair(args,file_path,fault_info)

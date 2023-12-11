@@ -1,6 +1,7 @@
 import os
 import re
 from os.path import join
+
 from app.core import definitions
 from app.drivers.tools.repair.AbstractRepairTool import AbstractRepairTool
 
@@ -31,40 +32,53 @@ class LLMR(AbstractRepairTool):
             [*bug_info[self.key_failing_tests], *bug_info[self.key_passing_tests]]
         )
         self.run_command("mkdir -p {}".format(join(self.dir_output, "patches")))
-        
-        file = bug_info[self.key_fix_file]
 
-        if bug_info[self.key_language] == "java" and not file.endswith('.java'):
-            file = f"src/main/java/{file.replace('.', '/')}.java"
+        file = ""
+        if self.key_fix_file in bug_info:
+            file = bug_info[self.key_fix_file]
+            if bug_info[self.key_language] == "java" and not file.endswith(".java"):
+                file = f"src/main/java/{file.replace('.', '/')}.java"
+            self.emit_debug("LLMR will work on file {}".format(file))
 
-        self.emit_debug("LLMR will work on file {}".format(file))
-        
+        fl = ""
+
+        if repair_config_info["fault_location"] == "auto":
+            fl = "-do-fl"
+
         # start running
         self.timestamp_log_start()
-        llmr_command = "timeout -k 5m {timeout_h}h python3 /tool/repair.py -model {model} -file {file} {reference_file} {bug_description} {build_script} -output {output_loc} -patches {patch_count} -test {test_script} {tests} {debug} {language}".format(
+        llmr_command = "timeout -k 5m {timeout_h}h python3 /tool/repair.py {fl} --project-path {project_path} -model {model} {file} {reference_file} {bug_description} {build_script} -output {output_loc} -patches {patch_count} -test {test_script} {tests} {debug} {language}".format(
             timeout_h=timeout_h,
             patch_count=5,
-            build_script="-build {}".format(join(self.dir_setup,bug_info[self.key_build_script]))
+            project_path=join(self.dir_expr, "src"),
+            build_script="-build {}".format(
+                join(self.dir_setup, bug_info[self.key_build_script])
+            )
             if (
                 self.key_build_script in bug_info
                 and bug_info[self.key_build_script] != ""
             )
             else "",
             output_loc=self.dir_output,
-            test_script=join(self.dir_setup,bug_info[self.key_test_script]),
-            file=file,
+            test_script=join(self.dir_setup, bug_info[self.key_test_script]),
+            file="-file {}".format(file) if file else "",
             model=model,
             tests="-tests {}".format(tests) if tests != "" else " ",
             debug="-d" if self.is_debug else "",
-            reference_file="-reference {}".format(bug_info[definitions.KEY_REFERENCE_FILE])
+            reference_file="-reference {}".format(
+                bug_info[definitions.KEY_REFERENCE_FILE]
+            )
             if definitions.KEY_REFERENCE_FILE in bug_info
             else "",
-            bug_description="-description {}".format(join(self.dir_setup,bug_info["bug_description"]))
+            bug_description="-description {}".format(
+                join(self.dir_setup, bug_info["bug_description"])
+            )
             if "bug_description" in bug_info
             else "",
             language="-lang {}".format(bug_info[self.key_language])
             if self.key_language in bug_info
             else "",
+            fl=fl,
         )
         status = self.run_command(
             llmr_command, self.log_output_path, join(self.dir_expr, "src")
@@ -119,8 +133,6 @@ class LLMR(AbstractRepairTool):
 
         if self.is_file(self.log_output_path):
             log_lines = self.read_file(self.log_output_path, encoding="iso-8859-1")
-            self.stats.time_stats.timestamp_start = log_lines[0].replace("\n", "")
-            self.stats.time_stats.timestamp_end = log_lines[-1].replace("\n", "")
 
             for line in log_lines:
                 if re.match("Patch .* is Plausible", line):
