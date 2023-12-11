@@ -9,6 +9,7 @@ import subprocess
 from openai import OpenAI
 from os.path import join
 import json
+import heapq
 
 client = OpenAI(api_key="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")
 from pprint import pprint
@@ -248,7 +249,7 @@ def repair(args,file,fault_info):
     if args.description:
         with open(args.description) as f:
             description_contents = f.read()
-
+    results = []
     i = 0
     for iteration in range(args.iterations):
         print("\n\nIteration {}\n\n".format(iteration))
@@ -268,11 +269,22 @@ def repair(args,file,fault_info):
         for resp in response:
             print("\n\nProcessing response {}\n\n".format(i))
             try:
-                process_response(resp, file, args, i)
+                results.append(process_response(resp, file, args, i))
             finally:
                 with open(file, "w") as f:
                     f.write(file_contents)
             i = i + 1
+    return results
+
+def make_patch(args, file,patched_path,i):
+    os.system(f"diff -u {file} {patched_path} > {args.output}/patches/patch_{i}.diff")
+
+conversion_table = {
+    'failed': 1,
+    'noncompiling': 0,
+    'implausible': -1,
+    'plausible': -2,
+}
 
 
 def process_response(resp,file, args, i):
@@ -295,7 +307,6 @@ def process_response(resp,file, args, i):
     with open(patched_path, "w") as f:
         f.write(patched_file)
     os.makedirs(os.path.join(args.output, "patches"), exist_ok=True)
-    os.system(f"diff -u {file} {patched_path} > {args.output}/patches/patch_{i}.diff")
     # build
     # if not apply_patch(file, patch_path):
     #    print("FAILED TO PATCH")
@@ -308,26 +319,31 @@ def process_response(resp,file, args, i):
             print("Patch {} Compiles".format(i))
         else:
             print("Patch {} does not compile".format(i))
-            shutil.move(patched_path, patched_path + "_noncompiling")
+            shutil.copy(patched_path, patched_path + "_noncompiling")
+            return ('noncompiling',file, patched_path)
     else:
         built = True
+    
     if built and args.test:
         plausible = True
         if args.tests:
             for test_id in args.tests.split(","):
                 if not test(args.test, test_id, args.debug):
                     print("Patch {} failed for test {}".format(i, test_id))
-                    shutil.move(patched_path, patched_path + "_implausible")
+                    shutil.copy(patched_path, patched_path + "_implausible")
                     plausible = False
-                    break
+                    return ('implausible',file, patched_path)
         else:
             if not test(args.test, None, args.debug):
                 print("Patch {} failed test script".format(i))
                 plausible = False
-                shutil.move(patched_path, patched_path + "_implausible")
+                shutil.copy(patched_path, patched_path + "_implausible")
+                return ('implausible',file, patched_path)
         if plausible:
             print("Patch {} is Plausible".format(i))
-            shutil.move(patched_path, patched_path + "_plausible")
+            shutil.copy(patched_path, patched_path + "_plausible")
+            return ('plausible',file, patched_path)
+    return ('failed',file, patched_path)
 
 
 def fault_localization(args):
@@ -407,5 +423,13 @@ if __name__ == "__main__":
 
     cases = get_bug_info(args)
 
+    patches = []
+
     for file_path, fault_info in cases:
-        repair(args,file_path,fault_info)
+        for patch in repair(args,file_path,fault_info):
+            transformed_patch = (conversion_table[patch[0]],*patch[1:])
+            heapq.heappush(patches,patch)
+    
+    for i in range(min(args.top,len(patches))):
+        (priority,file,patched_path) = heapq.heappop(patches)
+        make_patch(args, file,patched_path,i)
