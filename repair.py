@@ -353,7 +353,7 @@ def process_response(resp,file, args, i):
     return ('failed',file, patched_path)
 
 
-def fault_localization_py(args):
+def do_fault_localization_py(args):
     execute_command("python3 -m pytest --src . --family sbfl --exclude \"[$(ls | grep test | grep .py | tr '\n' ',' | sed 's/,$//')]\"",directory=args.project_path)
     report_dir = os.path.dirname(args.project_path)
     for dir in os.listdir(report_dir):
@@ -371,8 +371,8 @@ def fault_localization_py(args):
                 return process_distribution(args, distribution)
     raise Exception("No fault localization report found")
 
-def fault_localization_c(args):
-    if not args.binary_loc or args.file:
+def do_fault_localization_c(args):
+    if not args.binary_loc or not args.file:
         print("Please provide the location of the binary and the path of the file for the binary if you want to do FL on C")
         exit(1)
     
@@ -407,7 +407,7 @@ def fault_localization_c(args):
         return process_distribution(args, distribution)
 
 
-def fault_localization_java(args):
+def do_fault_localization_java(args):
     execute_command("java -cp '/flacoco/target/flacoco-1.0.7-SNAPSHOT-jar-with-dependencies.jar' fr.spoonlabs.flacoco.cli.FlacocoMain --projectpath {} -o flacoco.run".format(args.project_path),directory=args.project_path)
     with open(join(args.project_path,'flacoco.run')) as f:
         distribution = {}
@@ -420,13 +420,13 @@ def fault_localization_java(args):
 
 def fault_localization(args):
     if args.language.startswith("py"):
-        return fault_localization_py(args)
+        return do_fault_localization_py(args)
 
     elif args.language.startswith("c"):
-        return fault_localization_c(args)
+        return do_fault_localization_c(args)
 
     elif args.language.startswith("java"):
-        return fault_localization_java(args)
+        return do_fault_localization_java(args)
     else:
         print("Unsupported language {}".format(args.language))
         exit(1)
