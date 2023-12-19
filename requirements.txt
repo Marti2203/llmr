@@ -4,3 +4,6 @@ rich
 pytest
 pytest-timeout
 fauxpy
+polars
+matplotlib
+pandas

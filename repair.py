@@ -100,9 +100,9 @@ def build(build_script, debug=False):
     return res == 0
 
 
-def test(test_script, args=None, debug=False):
+def test(test_script, args=None, debug=False, env=dict()):
     res = execute_command(
-        test_script + " " + args if args is not None else " ", show_output=debug
+        test_script + " " + args if args is not None else " ", show_output=debug, env=env
     )
     return res == 0
 
@@ -191,19 +191,25 @@ def parse_args():
         "-reference", help="Reference file", type=str, required=False, default=None
     )
 
-    optional.add_argument("-tests", help="Tests", type=str, required=False)
+    optional.add_argument("-passing-tests", help="Comma sepearted list of test identifiers for passing tests", type=str, required=False, default ="")
+    optional.add_argument("-failing-tests", help="Comma sepearted list of test identifiers for failing tests", type=str, required=False, default="")
+
 
     optional.add_argument(
         "-fl", help="Fault localization path", type=argparse.FileType("r")
     )
 
-
+    optional.add_argument(
+        "-binary-loc",help="Location of the binary", type=str, required=False, default=None
+    )
 
     optional.add_argument(
         "-do-fl", help="Whether to do fault localization", action="store_true",default=False
     )
 
     optional.add_argument("-fl-formula",help="Fault localization formula", type=str, default="Ochiai")
+
+
 
     optional.add_argument(
         "--project-path", help="Project path", type=str, required=False, default=None
@@ -326,13 +332,14 @@ def process_response(resp,file, args, i):
     
     if built and args.test:
         plausible = True
-        if args.tests:
-            for test_id in args.tests.split(","):
-                if not test(args.test, test_id, args.debug):
-                    print("Patch {} failed for test {}".format(i, test_id))
-                    shutil.copy(patched_path, patched_path + "_implausible")
-                    plausible = False
-                    return ('implausible',file, patched_path)
+        if args.passing_tests or args.failing_tests:
+            for test_id in [*args.passing_tests.split(","),*args.failing_tests.split(",")]:
+                if test_id:
+                    if not test(args.test, test_id, args.debug):
+                        print("Patch {} failed for test {}".format(i, test_id))
+                        shutil.copy(patched_path, patched_path + "_implausible")
+                        plausible = False
+                        return ('implausible',file, patched_path)
         else:
             if not test(args.test, None, args.debug):
                 print("Patch {} failed test script".format(i))
@@ -346,34 +353,80 @@ def process_response(resp,file, args, i):
     return ('failed',file, patched_path)
 
 
+def fault_localization_py(args):
+    execute_command("python3 -m pytest --src . --family sbfl --exclude \"[$(ls | grep test | grep .py | tr '\n' ',' | sed 's/,$//')]\"",directory=args.project_path)
+    report_dir = os.path.dirname(args.project_path)
+    for dir in os.listdir(report_dir):
+        if dir.startswith("FauxPyReport"):
+            if not os.path.exists(join(report_dir ,dir, 'Scores_{}.csv'.format(args.fl_formula) )):
+                print("Fault localization report for formula {} does not exist".format(args.fl_formula))
+                exit(1)
+            with open(join(report_dir ,dir, 'Scores_{}.csv'.format(args.fl_formula) )) as f:
+                distribution = {}
+                for line in f.readlines()[1:]:
+                    #print(line)
+                    path,line_and_probability = line.split('::')
+                    line,_ = line_and_probability.split(',')
+                    distribution[path] = distribution.get(path,[]) + [line]
+                return process_distribution(args, distribution)
+    raise Exception("No fault localization report found")
+
+def fault_localization_c(args):
+    if not args.binary_loc or args.file:
+        print("Please provide the location of the binary and the path of the file for the binary if you want to do FL on C")
+        exit(1)
+    
+    os.makedirs(join(args.output,'passing_traces'),exist_ok=True)
+    os.makedirs(join(args.output,'failing_traces'),exist_ok=True)
+
+    execute_command("bash -c 'python3 /sbfl/dump_lines.py {0} $(cat {0} | wc -l) > /sbfl/lines.txt'".format(join(args.project_path,args.file)))
+
+    execute_command("python3 /sbfl/instrument.sh {} /sbfl/lines.txt".format(join(args.project_path,args.binary_loc)),directory='/sbfl/')
+
+    execute_command("bash -c 'mv /sbfl/*.tracer {}'".format(join(args.project_path,args.binary_loc)))
+
+    for passing_test_id in args.passing_tests.split(","):
+        if passing_test_id:
+            test(args.test,passing_test_id,args.debug,env={"TRACE_FILE": join(args.output,'passing_traces',f'passing_trace_{passing_test_id}') })
+    for failing_test_id in args.failing_tests.split(","):
+        if failing_test_id:
+            test(args.test,failing_test_id,args.debug,env={"TRACE_FILE": join(args.output,'failing_traces',f'failing_trace_{failing_test_id}')})
+
+    if os.listdir(join(args.output,'passing_traces')) == 0 and os.listdir(join(args.output,'failing_traces')) == 0:
+        print("No traces were generated")
+        exit(1)
+
+    execute_command(f"python3 /sbfl/sbfl.py {join(args.output,'failing_traces')} {join(args.output,'passing_traces')}",directory='/sbfl/')
+
+    with open(join('/sbfl/ochiai.csv','r')) as f:
+        distribution = {}
+        for line in f.readlines():
+            path,line_and_prob = line.split(':')
+            line,prob = line_and_prob.split(',')
+            distribution[path] = distribution.get(path,[]) + [line]
+        return process_distribution(args, distribution)
+
+
+def fault_localization_java(args):
+    execute_command("java -cp '/flacoco/target/flacoco-1.0.7-SNAPSHOT-jar-with-dependencies.jar' fr.spoonlabs.flacoco.cli.FlacocoMain --projectpath {} -o flacoco.run".format(args.project_path),directory=args.project_path)
+    with open(join(args.project_path,'flacoco.run')) as f:
+        distribution = {}
+        for line in f.readlines():
+            path,line,_= line.split(',')
+            path = join(args.project_path,'src','main','java',path.replace('.','/') + '.java')
+            distribution[path] = distribution.get(path,[]) + [line]
+        return process_distribution(args, distribution)
+
+
 def fault_localization(args):
     if args.language.startswith("py"):
-        execute_command("python3 -m pytest --src . --family sbfl --exclude \"[$(ls | grep test | grep .py | tr '\n' ',' | sed 's/,$//')]\"",directory=args.project_path)
-        report_dir = os.path.dirname(args.project_path)
-        for dir in os.listdir(report_dir):
-            if dir.startswith("FauxPyReport"):
-                if not os.path.exists(join(report_dir ,dir, 'Scores_{}.csv'.format(args.fl_formula) )):
-                    print("Fault localization report for formula {} does not exist".format(args.fl_formula))
-                    exit(1)
-                with open(join(report_dir ,dir, 'Scores_{}.csv'.format(args.fl_formula) )) as f:
-                    distribution = {}
-                    for line in f.readlines()[1:]:
-                        #print(line)
-                        path,line_and_probability = line.split('::')
-                        line,_ = line_and_probability.split(',')
-                        distribution[path] = distribution.get(path,[]) + [line]
-                    return process_distribution(args, distribution)
+        return fault_localization_py(args)
+
     elif args.language.startswith("c"):
-        pass
+        return fault_localization_c(args)
+
     elif args.language.startswith("java"):
-        execute_command("java -cp '/flacoco/target/flacoco-1.0.7-SNAPSHOT-jar-with-dependencies.jar' fr.spoonlabs.flacoco.cli.FlacocoMain --projectpath {} -o flacoco.run".format(args.project_path),directory=args.project_path)
-        with open(join(args.project_path,'flacoco.run')) as f:
-            distribution = {}
-            for line in f.readlines():
-                path,line,_= line.split(',')
-                path = join(args.project_path,'src','main','java',path.replace('.','/') + '.java')
-                distribution[path] = distribution.get(path,[]) + [line]
-            return process_distribution(args, distribution)
+        return fault_localization_java(args)
     else:
         print("Unsupported language {}".format(args.language))
         exit(1)

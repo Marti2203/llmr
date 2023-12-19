@@ -1,0 +1,6 @@
+sample.c:6
+sample.c:6
+sample.c:12
+sample.c:9
+sample.c:9
+sample.c:12

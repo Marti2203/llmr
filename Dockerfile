@@ -7,14 +7,17 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git pyth
 WORKDIR /
 
 RUN \
-  apt-get update -y && \
   apt-get install software-properties-common -y && \
-  apt-get update -y && \
   DEBIAN_FRONTEND=noninteractive \
   apt-get install -y openjdk-11-jdk \
                 git \
                 build-essential \
 				subversion \
+                cmake \
+                make \
+                unzip \
+                autoconf \
+                automake \
 				perl \
 				curl \
                 gcc \
@@ -22,6 +25,11 @@ RUN \
                 maven \
                 ant \
 				unzip \
+                gdb \
+                wget \
+                nano \
+                xxd \
+                libasan6 \
 				make 
 # Java version
 ENV JAVA_HOME /usr/lib/jvm/java-11-openjdk-amd64
@@ -31,11 +39,17 @@ ENV TZ=Asia/Singapore
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # Prepare Fault localization helpers
-
 RUN git clone https://github.com/ASSERT-KTH/flacoco.git
 
 WORKDIR /flacoco
 RUN mvn install -DskipTests
+
+WORKDIR /
+
+COPY ./sbfl sbfl
+WORKDIR /sbfl
+
+RUN ./build.sh
 
 # Prepare tool
 WORKDIR /
