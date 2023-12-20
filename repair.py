@@ -417,20 +417,26 @@ def do_fault_localization_py(args):
 
 
 def do_fault_localization_c(args):
-    if not args.binary_loc or not args.file:
+    if not args.binary_loc:
         print(
-            "Please provide the location of the binary and the path of the file for the binary if you want to do FL on C"
+            "Please provide the location of the binary for the binary if you want to do FL on C"
         )
         exit(1)
 
     os.makedirs(join(args.output, "passing_traces"), exist_ok=True)
     os.makedirs(join(args.output, "failing_traces"), exist_ok=True)
 
-    execute_command(
-        "bash -c 'python3 /sbfl/dump_lines.py {0} $(cat {0} | wc -l) > /sbfl/lines.txt'".format(
-            join(args.project_path, args.file)
+    
+    if args.file:
+        execute_command(
+            "bash -c 'python3 /sbfl/dump_lines.py {0} $(cat {0} | wc -l) > /sbfl/lines.txt'".format(
+                join(args.project_path, args.file)
+            )
         )
-    )
+    else:
+        # Take all files and send them to the fault localization
+        execute_command(f"bash -c 'for x in $(find {args.project_path} | grep -E \".*\\.(c|cxx|hxx|cpp|hpp|h)$\"); do python3 /sbfl/dump_lines.py $x $(cat $x | wc -l ) >> /sbfl/lines.txt ; done'",
+        directory="/sbfl/")
 
     execute_command(
         "python3 /sbfl/instrument.sh {} /sbfl/lines.txt".format(

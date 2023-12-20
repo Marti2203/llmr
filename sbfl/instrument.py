@@ -87,7 +87,7 @@ if ADDR_RANGE_SELECTION == "last":
 if ADDR_RANGE_SELECTION == "both":
     address_line_tuples = [i for j in address_line_tuples for i in j]
 else:
-    throw("Unimplemented!")
+    raise Exception("Unimplemented!")
 
 # Each address may correspond to multiple source lines; need to combine into single
 # instrumentation point

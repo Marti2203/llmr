@@ -77,9 +77,10 @@ ochiai = efs / ((total_failing) * (efs + eps)).map_rows(np.sqrt)
 
 scores = ochiai.transpose(include_header=True, header_name="line", column_names=["score"])
 # scores.write_csv("all-ochiai.csv")
-top5 =  scores.sort("score", descending=True).head(5)
+top_patches = int(os.getenv("TOP_PATCHES",20))
+top5 =  scores.sort("score", descending=True).head(top_patches)
 
 print("")
-print("Ochiai Top-5")
+print("Ochiai Top-{}".format(top_patches))
 print(top5)
 top5.write_csv(f"{out_dir}/ochiai.csv", include_header=False)
