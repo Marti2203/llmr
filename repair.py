@@ -492,7 +492,7 @@ def do_fault_localization_c(args):
         directory="/sbfl/",
     )
 
-    with open("/sbfl/ochiai.csv", "r") as f:
+    with open("/output/ochiai.csv", "r") as f:
         distribution = {}
         for line in f.readlines():
             path, line_and_prob = line.split(":")
