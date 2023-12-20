@@ -439,7 +439,7 @@ def do_fault_localization_c(args):
         directory="/sbfl/")
 
     execute_command(
-        "python3 /sbfl/instrument.sh {} /sbfl/lines.txt".format(
+        "python3 /sbfl/instrument.py {} /sbfl/lines.txt".format(
             join(args.project_path, args.binary_loc)
         ),
         directory="/sbfl/",
