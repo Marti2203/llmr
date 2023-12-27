@@ -1,5 +1,6 @@
 import argparse
 import os
+from typing import Dict, List
 import rich
 import sys
 import os.path
@@ -217,7 +218,7 @@ def parse_args():
     )
 
     optional.add_argument(
-        "-fl", help="Fault localization path", type=argparse.FileType("r")
+        "-fl-data", help="Fault localization path", type=argparse.FileType("r")
     )
 
     optional.add_argument(
@@ -264,7 +265,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def repair(args, file, fault_info):
+def repair(args, file:str, fault_info:str):
     lang_info = "in the {} programming language".format(
         args.language if args.language else file(".")[-1]
     )
@@ -311,7 +312,7 @@ def repair(args, file, fault_info):
     return results
 
 
-def make_patch(args, file, patched_path, i):
+def make_patch(args, file:str, patched_path:str, i:int):
     os.system(f"diff -u {file} {patched_path} > {args.output}/patches/patch_{i}.diff")
 
 
@@ -323,7 +324,7 @@ conversion_table = {
 }
 
 
-def process_response(resp, file, args, i):
+def process_response(resp, file:str, args, i:int):
     with open(os.path.join(args.output, "response_{}.txt".format(i)), "w") as f:
         f.write(resp.message.content)
     # if args.debug:
@@ -537,7 +538,7 @@ def fault_localization(args):
         exit(1)
 
 
-def process_distribution(args, distribution):
+def process_distribution(args, distribution: Dict[str, List[str]]):
     distribution_converted = []
     for k, v in distribution.items():
         if args.lines:
@@ -573,15 +574,15 @@ def get_bug_info(args):
                 )
                 exit(1)
         return fault_localization(args)
-    elif args.fl:
-        print("Provided Fault localization is not supported currently")
-        sys.exit(1)
-        # fl_info = list(map(lambda line: line.split("@")[-1], args.fl.readlines()))
-        # if args.lines:
-        #    fl_info = list(
-        #        map(lambda line: "`" + file_contents[line - 1] + "`", fl_info)
-        #    )
-        # bug_info = "in any of the lines in the list {}".format(",".join(fl_info))
+    elif args.fl_data:
+        print("Reading FL data")
+        distribution = {}
+        for line in args.fl:
+            path, line_and_probability = line.split("::")
+            line, _ = line_and_probability.split(",")
+            distribution[path] = distribution.get(path, []) + [line]
+        
+        return process_distribution(args, distribution)
     elif args.file:
         return [(args.file, "in the file ")]
     else:
