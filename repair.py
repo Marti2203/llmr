@@ -577,7 +577,7 @@ def get_bug_info(args):
     elif args.fl_data:
         print("Reading FL data")
         distribution = {}
-        for line in args.fl:
+        for line in args.fl_data:
             path, line_and_probability = line.split("::")
             line, _ = line_and_probability.split(",")
             distribution[path] = distribution.get(path, []) + [line]
