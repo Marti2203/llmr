@@ -607,7 +607,7 @@ if __name__ == "__main__":
     for file_path, fault_info in cases:
         for patch in repair(args, file_path, fault_info):
             transformed_patch = (conversion_table[patch[0]], *patch[1:])
-            heapq.heappush(patches, patch)
+            heapq.heappush(patches, transformed_patch)
 
     for i in range(min(args.top, len(patches))):
         (priority, file, patched_path) = heapq.heappop(patches)
