@@ -1,6 +1,6 @@
 import argparse
 import os
-from typing import Dict, List
+from typing import Dict, List, Tuple, Union, cast
 import rich
 import sys
 import os.path
@@ -165,7 +165,7 @@ def parse_args():
 
     optional.add_argument(
         "-description",
-        help="Description of the bug",
+        help="Path to a description of the bug. Can help the model create a better patch.",
         type=str,
         required=False,
         default=None,
@@ -190,7 +190,7 @@ def parse_args():
     optional.add_argument(
         "-test",
         help="Test script location",
-        type=str,  # argparse.FileType("r"),
+        type=str,
         required=False,
     )
 
@@ -257,19 +257,18 @@ def parse_args():
     optional.add_argument("-lang", "--language", help="Lanaguage")
     optional.add_argument(
         "-lines",
-        help="Whether to write down the specific lines. This works only if there is fault localization given.",
+        help="Whether to write down the specific lines when giving information to the model. This works only if there is fault localization with line level granularity.",
         action="store_true",
         default=False,
     )
-    # optional.add_argument("-tests", help="Tests")
+
     return parser.parse_args()
 
-
-def repair(args, file:str, fault_info:str):
+def repair(args, file_path: str, fault_info: str):
     lang_info = "in the {} programming language".format(
-        args.language if args.language else file(".")[-1]
+        args.language if args.language else file_path(".")[-1]
     )
-    with open(file) as f:
+    with open(file_path) as f:
         file_contents = f.read()
 
     os.makedirs(args.output, exist_ok=True)
@@ -285,14 +284,14 @@ def repair(args, file:str, fault_info:str):
         with open(args.description) as f:
             description_contents = f.read()
     results = []
-    i = 0
+    response_count = 0
     for iteration in range(args.iterations):
         print("\n\nIteration {}\n\n".format(iteration))
         response = send_prompt(
             args,
             PROMPT.format(
                 lang_info=lang_info,
-                file_name=os.path.basename(file),
+                file_name=os.path.basename(file_path),
                 program=file_contents,
                 fault_info=fault_info,
             ),
@@ -302,18 +301,18 @@ def repair(args, file:str, fault_info:str):
             bug_description=description_contents,
         ).choices
         for resp in response:
-            print("\n\nProcessing response {}\n\n".format(i))
+            print("\n\nProcessing response {}\n\n".format(response_count))
             try:
-                results.append(process_response(resp, file, args, i))
+                results.append(process_response(resp, file_path, args, response_count))
             finally:
-                with open(file, "w") as f:
+                with open(file_path, "w") as f:
                     f.write(file_contents)
-            i = i + 1
+            response_count = response_count + 1
     return results
 
 
-def make_patch(args, file:str, patched_path:str, i:int):
-    os.system(f"diff -u {file} {patched_path} > {args.output}/patches/patch_{i}.diff")
+def make_patch(args, file: str, patched_path: str, patch_index: int):
+    os.system(f"diff -u {file} {patched_path} > {args.output}/patches/patch_{patch_index}.diff")
 
 
 conversion_table = {
@@ -323,30 +322,27 @@ conversion_table = {
     "plausible": -2,
 }
 
-
-def process_response(resp, file:str, args, i:int):
-    with open(os.path.join(args.output, "response_{}.txt".format(i)), "w") as f:
+def process_response(resp, file: str, args, response_count: int):
+    with open(os.path.join(args.output, "response_{}_{}.txt".format(os.path.basename(file),response_count)), "w") as f:
         f.write(resp.message.content)
     # if args.debug:
     #    print(resp.message.content)
     patched_path = os.path.join(
-        args.output, "patched_{}_{}".format(i, os.path.basename(file))
+        args.output, "patched_{}_{}".format(response_count, os.path.basename(file))
     )
     if "```" not in resp.message.content:
-        print("Skipping output {} due to missing concrete patch".format(i))
+        print("Skipping output {} due to missing concrete patch".format(response_count))
         return ("failed", file, None)
     patched_file = resp.message.content.split("```")[1]
     if args.language and patched_file.startswith(args.language):
         patched_file = patched_file[len(args.language) :]
     if patched_file.startswith("\n"):
         patched_file = patched_file[1:]
-    # print(patched_file)
     with open(patched_path, "w") as f:
         f.write(patched_file)
-    os.makedirs(os.path.join(args.output, "patches"), exist_ok=True)
-    # build
-    # if not apply_patch(file, patch_path):
-    #    print("FAILED TO PATCH")
+    return evaluate_patched_file(args,patched_path,patched_file,response_count,file)
+
+def evaluate_patched_file(args,patched_path,patched_file,i,file):
     with open(file, "w") as f:
         f.write(patched_file)
     built = False
@@ -413,7 +409,7 @@ def do_fault_localization_py(args):
                     path, line_and_probability = line.split("::")
                     line, _ = line_and_probability.split(",")
                     distribution[path] = distribution.get(path, []) + [line]
-                return process_distribution(args, distribution)
+                return process_fault_localization(args, distribution)
     raise Exception("No fault localization report found")
 
 
@@ -427,7 +423,6 @@ def do_fault_localization_c(args):
     os.makedirs(join(args.output, "passing_traces"), exist_ok=True)
     os.makedirs(join(args.output, "failing_traces"), exist_ok=True)
 
-    
     if args.file:
         execute_command(
             "bash -c 'python3 /sbfl/dump_lines.py {0} $(cat {0} | wc -l) > /sbfl/lines.txt'".format(
@@ -436,8 +431,10 @@ def do_fault_localization_c(args):
         )
     else:
         # Take all files and send them to the fault localization
-        execute_command(f"bash -c 'for x in $(find {args.project_path} | grep -E \".*\\.(c|cxx|hxx|cpp|hpp|h)$\"); do python3 /sbfl/dump_lines.py $x $(cat $x | wc -l ) >> /sbfl/lines.txt ; done'",
-        directory="/sbfl/")
+        execute_command(
+            f"bash -c 'for x in $(find {args.project_path} | grep -E \".*\\.(c|cxx|hxx|cpp|hpp|h)$\"); do python3 /sbfl/dump_lines.py $x $(cat $x | wc -l ) >> /sbfl/lines.txt ; done'",
+            directory="/sbfl/",
+        )
 
     execute_command(
         "python3 /sbfl/instrument.py {} /sbfl/lines.txt".format(
@@ -493,13 +490,13 @@ def do_fault_localization_c(args):
         directory="/sbfl/",
     )
 
-    with open("/output/ochiai.csv", "r") as f:
+    with open(join(args.output, "ochiai.csv"), "r") as f:
         distribution = {}
         for line in f.readlines():
             path, line_and_prob = line.split(":")
-            line, prob = line_and_prob.split(",")
+            line, _ = line_and_prob.split(",")
             distribution[path] = distribution.get(path, []) + [line]
-        return process_distribution(args, distribution)
+        return process_fault_localization(args, distribution)
 
 
 def do_fault_localization_java(args):
@@ -521,7 +518,7 @@ def do_fault_localization_java(args):
                 path.replace(".", "/") + ".java",
             )
             distribution[path] = distribution.get(path, []) + [line]
-        return process_distribution(args, distribution)
+        return process_fault_localization(args, distribution)
 
 
 def fault_localization(args):
@@ -538,9 +535,11 @@ def fault_localization(args):
         exit(1)
 
 
-def process_distribution(args, distribution: Dict[str, List[str]]):
+def process_fault_localization(
+    args, fault_localization_distribution: Dict[str, List[Union[str, int]]]
+) -> List[Tuple[str, str, List[int]]]:
     distribution_converted = []
-    for k, v in distribution.items():
+    for k, v in fault_localization_distribution.items():
         if args.lines:
             with open(k) as f:
                 lines = f.readlines()
@@ -581,10 +580,10 @@ def get_bug_info(args):
             path, line_and_probability = line.split("::")
             line, _ = line_and_probability.split(",")
             distribution[path] = distribution.get(path, []) + [line]
-        
-        return process_distribution(args, distribution)
+
+        return process_fault_localization(args, distribution)
     elif args.file:
-        return [(args.file, "in the file ")]
+        return cast(List[Tuple[str, str]], [(args.file, "in the file ")])
     else:
         print(
             "Please provide a way to find the file to repair - either fault localization (manual, provided) or file path"
@@ -594,10 +593,12 @@ def get_bug_info(args):
 
 if __name__ == "__main__":
     args = parse_args()
-    print(args)
+    if args.debug:
+        print(args)
+    os.makedirs(os.path.join(args.output, "patches"), exist_ok=True)
 
     if args.file and not os.path.exists(args.file):
-        print("FILE {} DOES NOT EXIST".format(args.file))
+        print("File {} does not exist, yet it is passed as the target".format(args.file))
         sys.exit(1)
 
     cases = get_bug_info(args)
