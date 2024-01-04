@@ -334,7 +334,7 @@ def process_response(resp, file:str, args, i:int):
     )
     if "```" not in resp.message.content:
         print("Skipping output {} due to missing concrete patch".format(i))
-        return
+        return ("failed", file, None)
     patched_file = resp.message.content.split("```")[1]
     if args.language and patched_file.startswith(args.language):
         patched_file = patched_file[len(args.language) :]
@@ -611,4 +611,6 @@ if __name__ == "__main__":
 
     for i in range(min(args.top, len(patches))):
         (priority, file, patched_path) = heapq.heappop(patches)
+        if patched_path is None:
+            break
         make_patch(args, file, patched_path, i)
