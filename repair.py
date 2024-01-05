@@ -1,21 +1,30 @@
 import argparse
-import os
-from typing import Dict, List, Tuple, Union, cast
-import rich
-import sys
+import heapq
+import json
+import math
 import os.path
 import shutil
-import requests
 import subprocess
-from openai import OpenAI
+import sys
 from os.path import join
-import json
-import heapq
+from typing import cast
+from typing import Dict
+from typing import List
+from typing import Literal
+from typing import Tuple
+from typing import Union
+
+import rich
+from openai import OpenAI
+
+MAX_TOKENS = 4096
+MAX_NON_CHUNKED_LENGTH = 4000
+file_error_log = "error.logs"
 
 client = OpenAI(api_key="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")
 from pprint import pprint
 
-PROMPT = """
+SINGLE_PROMPT = """
 Here is the following file {lang_info} with name {file_name}.
 There is a bug {fault_info}.
 I would like you to repair the file and respond with a patched version of the file.
@@ -24,10 +33,29 @@ Here is the code:
 {program}
 """
 
+CHUNKED_PROMPT = """
+Here is the following file {lang_info} with name {file_name}.
+There is a bug {fault_info}.
+I would like you to repair the file and respond with a patched version of the file.
+Here is the code:
+
+{program}
+"""
+
+CONTEXT_PROMPT = """
+Here is a fragment from the following file {lang_info} with name {file_name}.
+There is a functionality-related bug {fault_info}.
+I would like you to repair the fragment and respond with a patched version of the fragment.
+Focus on the current segment only and what needs to be changed in it to make it inserted back at the right spot, which will ensure it makes a syntactically correct file.
+Here is the code:
+
+{program}
+"""
+
 prompt_number = 0
 
 
-def send_prompt(
+def send_prompt_single(
     args,
     text: str,
     model: str,
@@ -35,16 +63,19 @@ def send_prompt(
     temperature=0.8,
     reference=None,
     bug_description=None,
+    lines=None,
 ):
+    lines = lines or []
     global prompt_number
-    # print(text)
 
+    initial_message = "You are a helpful programming assistant, which repairs programs and outputs the contents of the repaired file, surrounded by triple backticks (```)."
+    text_fragments = [{"role": "user", "content": text}]
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful programming assistant, which repairs programs and outputs the contents of the repaired file, surrounded by triple backticks (```).",
+            "content": initial_message,
         },
-        {"role": "user", "content": text},
+        *text_fragments,
     ]
     if reference:
         messages.insert(
@@ -54,12 +85,13 @@ def send_prompt(
                 "content": f"This is the reference file, which you can use as a solution to help you repair:\n {reference}",
             },
         )
+
     if bug_description:
         messages.insert(
             1,
             {
                 "role": "system",
-                "content": f"This is the description of the bug, your goal is to satisfy it:\n {bug_description}",
+                "content": f"This is the description of the task the program has to handle, your goal is to satisfy it:\n {bug_description}",
             },
         )
 
@@ -72,13 +104,160 @@ def send_prompt(
         model=model,
         messages=messages,
         temperature=temperature,
-        max_tokens=2048,
+        max_tokens=MAX_TOKENS,
         top_p=1.0,
         n=num,
     )
 
 
-file_error_log = "error.logs"
+def send_prompt_chunked(
+    args,
+    text: str,
+    model: str,
+    num=1,
+    temperature=0.8,
+    reference=None,
+    bug_description=None,
+    lines=None,
+):
+    lines = lines or []
+    global prompt_number
+
+    print("Chunking. Currently not reachable!!!!!!")
+    exit(1)
+    initial_message = 'You are a helpful programming assistant, which repairs programs provied in chunks and outputs the contents of the repaired chunks, surrounded by triple backticks (```). with the first line having saying which is the chunk in the format "CHUNK x" relating it to the originally provided chunk'
+    chunks = math.ceil(len(text) / MAX_NON_CHUNKED_LENGTH)
+    text_fragments = []
+
+    for chunk in range(chunks):
+        chunk_text = text[
+            chunk
+            * MAX_NON_CHUNKED_LENGTH : min(
+                len(text), (chunk + 1) * MAX_NON_CHUNKED_LENGTH
+            )
+        ]
+        text_fragments.append(
+            {"role": "user", "content": f"Chunk {chunk+1}/{chunks}:\n{chunk_text}"}
+        )
+
+    messages = [
+        {
+            "role": "system",
+            "content": initial_message,
+        },
+        *text_fragments,
+    ]
+
+    if reference:
+        chunks = math.ceil(len(reference) / MAX_NON_CHUNKED_LENGTH)
+        for chunk in reversed(range(chunks)):
+            chunk_text = reference[
+                chunk
+                * MAX_NON_CHUNKED_LENGTH : min(
+                    len(reference), (chunk + 1) * MAX_NON_CHUNKED_LENGTH
+                )
+            ]
+            messages.insert(
+                1,
+                {
+                    {
+                        "role": "system",
+                        "content": f"Reference Chunk {chunk+1}/{chunks}:\n{chunk_text}",
+                    }
+                },
+            )
+
+        messages.insert(
+            1,
+            {
+                "role": "system",
+                "content": "This is the reference file which you can use as a solution to help you repair. It is also provided in chunks. The chunks need not align with the original file.",
+            },
+        )
+
+    if bug_description:
+        messages.insert(
+            1,
+            {
+                "role": "system",
+                "content": f"This is the description of the task the program has to handle, your goal is to satisfy it:\n {bug_description}",
+            },
+        )
+
+    prompt_number += 1
+    if args.debug:
+        with open(join(args.output, "prompt_{}.json".format(prompt_number)), "w") as f:
+            json.dump(messages, f, indent=4)
+
+    return client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=MAX_TOKENS,
+        top_p=1.0,
+        n=num,
+    )
+
+
+def send_prompt_context(
+    args,
+    text: str,
+    model: str,
+    num=1,
+    temperature=0.8,
+    reference=None,
+    bug_description=None,
+    lines=None,
+):
+    lines = lines or []
+    global prompt_number
+
+    initial_message = (
+        "You are a helpful programming assistant, which repairs fragments of programs and outputs the contents of the repaired fragment, surrounded by triple backticks (```). "
+        "You keep the indentation the same as original to allow for the fragment to be succesfully inserted back into the file."
+        "Assume that after the fragment there is code that will make it syntactically correct."
+    )
+    text_fragments = [{"role": "user", "content": text}]
+
+    messages = [
+        {
+            "role": "system",
+            "content": initial_message,
+        },
+        *text_fragments,
+    ]
+
+    if reference:
+        messages.insert(
+            1,
+            {
+                "role": "system",
+                "content": f"This is the reference file, which you can use as a solution to help you repair:\n {reference}",
+            },
+        )
+
+    if bug_description:
+        messages.insert(
+            1,
+            {
+                "role": "system",
+                "content": f"This is the description of the task the program has to handle, your goal is to satisfy it:\n {bug_description}",
+            },
+        )
+
+    prompt_number += 1
+    if args.debug:
+        with open(join(args.output, "prompt_{}.json".format(prompt_number)), "w") as f:
+            json.dump(messages, f, indent=4)
+
+    return client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=MAX_TOKENS,
+        top_p=1.0,
+        n=num,
+    )
 
 
 def execute_command(command: str, show_output=True, env=dict(), directory=None):
@@ -126,11 +305,53 @@ def apply_patch(file, patch_path):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(prog="flem", usage="%(prog)s [options]")
+    parser = argparse.ArgumentParser(prog="LLMR", usage="%(prog)s [options]")
     parser._action_groups.pop()
 
-    optional = parser.add_argument_group("Arguments")
+    file_processing_approach = parser.add_mutually_exclusive_group(required=False)
 
+    file_processing_approach.add_argument(
+        "-single",
+        help="Process the file as a single unit. Will fail if too big to process by the model",
+        action="store_true",
+        default=True,
+    )
+
+    file_processing_approach.add_argument(
+        "-chunked",
+        help="Split the file in chunks when too big",
+        action="store_true",
+        default=False,
+    )
+
+    file_processing_approach.add_argument(
+        "-context",
+        help="Send the faulty lines using a context window. Truncates the code to the specified lines",
+        type=int,
+        default=-1,
+    )
+
+    fault_localization_group = parser.add_mutually_exclusive_group(required=True)
+
+    fault_localization_group.add_argument(
+        "-file",
+        help="Location of faulty file, file level granularity. Does not work with context window",
+        type=str,
+        required=False,
+    )
+
+    fault_localization_group.add_argument(
+        "-do-fl",
+        help="Whether to do fault localization internally",
+        action="store_true",
+        default=False,
+    )
+
+    fault_localization_group.add_argument(
+        "-fl-data", help="Path of fautl localization data", type=argparse.FileType("r")
+    )
+
+    optional = parser.add_argument_group("Arguments")
     optional.add_argument(
         "-iterations",
         help="Amount of iterations for a self-consistency check",
@@ -145,6 +366,14 @@ def parse_args():
         type=str,
         required=False,
         default="gpt-4-32k",
+    )
+
+    optional.add_argument(
+        "-only-plausible",
+        help="Only plausible patches are generated",
+        action="store_true",
+        required=False,
+        default=False,
     )
 
     optional.add_argument(
@@ -193,11 +422,6 @@ def parse_args():
         type=str,
         required=False,
     )
-
-    # optional.add_argument(
-    #    "-context", help="Context Window size", type=int, required=False, default=-1
-    # )
-
     optional.add_argument(
         "-reference", help="Reference file", type=str, required=False, default=None
     )
@@ -218,10 +442,6 @@ def parse_args():
     )
 
     optional.add_argument(
-        "-fl-data", help="Fault localization path", type=argparse.FileType("r")
-    )
-
-    optional.add_argument(
         "-binary-loc",
         help="Location of the binary",
         type=str,
@@ -230,25 +450,11 @@ def parse_args():
     )
 
     optional.add_argument(
-        "-do-fl",
-        help="Whether to do fault localization",
-        action="store_true",
-        default=False,
-    )
-
-    optional.add_argument(
         "-fl-formula", help="Fault localization formula", type=str, default="Ochiai"
     )
 
     optional.add_argument(
         "--project-path", help="Project path", type=str, required=False, default=None
-    )
-
-    optional.add_argument(
-        "-file",
-        help="Location of faulty file",
-        type=str,
-        required=False,
     )
 
     optional.add_argument(
@@ -264,10 +470,22 @@ def parse_args():
 
     return parser.parse_args()
 
-def repair(args, file_path: str, fault_info: str):
+
+def repair(
+    args, file_path: str, faulty_lines: List[int]
+) -> List[Tuple[Literal["failed", "plausible", "compiling", "noncompiling"], str, str]]:
     lang_info = "in the {} programming language".format(
-        args.language if args.language else file_path(".")[-1]
+        args.language if args.language else os.path.splitext(file_path)[1]
     )
+
+    if not os.path.exists(file_path):
+        print(
+            "File {} does not exist, yet it is passed as the target for repair".format(
+                file_path
+            )
+        )
+        return []
+
     with open(file_path) as f:
         file_contents = f.read()
 
@@ -283,36 +501,124 @@ def repair(args, file_path: str, fault_info: str):
     if args.description:
         with open(args.description) as f:
             description_contents = f.read()
+
+    if args.chunked and len(file_path) > MAX_NON_CHUNKED_LENGTH:
+        print("File is too large to be processed. Chunking to be implemented soon")
+        return []
+
     results = []
     response_count = 0
     for iteration in range(args.iterations):
-        print("\n\nIteration {}\n\n".format(iteration))
-        response = send_prompt(
-            args,
-            PROMPT.format(
-                lang_info=lang_info,
-                file_name=os.path.basename(file_path),
-                program=file_contents,
-                fault_info=fault_info,
-            ),
-            num=args.patches,
-            model=args.model,
-            reference=reference_contents,
-            bug_description=description_contents,
-        ).choices
-        for resp in response:
-            print("\n\nProcessing response {}\n\n".format(response_count))
-            try:
-                results.append(process_response(resp, file_path, args, response_count))
-            finally:
-                with open(file_path, "w") as f:
-                    f.write(file_contents)
-            response_count = response_count + 1
+        print("\n\nIteration {} on file {}\n\n".format(iteration, file_path))
+
+        if args.chunked:
+            instances, producer, consumer, prompt, extra_args = (
+                [],
+                send_prompt_chunked,
+                process_response_chunked,
+                CHUNKED_PROMPT,
+                {},
+            )
+
+        elif args.context > 0:
+            instances_temp = []
+            for faulty_line in faulty_lines:
+                temp_info = "in the line {}".format(file_contents[faulty_line - 1])
+                file_lines = file_contents.split("\n")
+                temp_program = "\n".join(
+                    file_lines[
+                        max(0, faulty_line - args.context) : min(
+                            len(file_lines) - 1, faulty_line + args.context
+                        )
+                    ]
+                )
+                with open(
+                    join(
+                        args.output,
+                        "context_{}_{}".format(
+                            faulty_line, os.path.basename(file_path)
+                        ),
+                    ),
+                    "w",
+                ) as f:
+                    f.write(temp_program)
+
+                instances_temp.append((temp_info, temp_program))
+
+            instances, producer, consumer, prompt, extra_args = (
+                instances_temp,
+                send_prompt_context,
+                process_response_context,
+                CONTEXT_PROMPT,
+                {"lines": faulty_lines},
+            )
+        elif args.single:
+            temp_info = ""
+            if args.file:
+                temp_info = "in the file"
+            elif args.lines:
+                temp_info = "in any of the lines in the list [{}]".format(
+                    ",".join(
+                        list(map(lambda x: file_contents[int(x) - 1], faulty_lines))
+                    )
+                )
+            else:
+                temp_info = "in any of the lines in the list [{}]".format(
+                    ",".join(map(str, faulty_lines))
+                )
+
+            instances, producer, consumer, prompt, extra_args = (
+                [(temp_info, file_contents)],
+                send_prompt_single,
+                process_response_single,
+                SINGLE_PROMPT,
+                {},
+            )
+        else:
+            print("Unexpected file processing case, LLMR needs to be examined")
+            exit(1)
+
+        for instance, (fault_info, program) in enumerate(instances):
+            response = producer(
+                args,
+                text=prompt.format(
+                    lang_info=lang_info,
+                    file_name=os.path.basename(file_path),
+                    program=program,
+                    fault_info=fault_info,
+                ),
+                num=args.patches,
+                model=args.model,
+                reference=reference_contents,
+                bug_description=description_contents,
+            ).choices
+            for resp in response:
+                print("\n\nProcessing response {}\n\n".format(response_count))
+                try:
+                    results.append(
+                        consumer(
+                            resp,
+                            file_path,
+                            args,
+                            response_count,
+                            instance=instance,
+                            **extra_args,
+                        )
+                    )
+                except Exception as e:
+                    print("Got exception while processing response")
+                    print(e)
+                finally:
+                    with open(file_path, "w") as f:
+                        f.write(file_contents)
+                response_count = response_count + 1
     return results
 
 
 def make_patch(args, file: str, patched_path: str, patch_index: int):
-    os.system(f"diff -u {file} {patched_path} > {args.output}/patches/patch_{patch_index}.diff")
+    os.system(
+        f"diff -u {file} {patched_path} > {args.output}/patches/patch_{patch_index}.diff"
+    )
 
 
 conversion_table = {
@@ -322,8 +628,15 @@ conversion_table = {
     "plausible": -2,
 }
 
-def process_response(resp, file: str, args, response_count: int):
-    with open(os.path.join(args.output, "response_{}_{}.txt".format(os.path.basename(file),response_count)), "w") as f:
+
+def process_response_single(resp, file: str, args, response_count: int, **kwargs):
+    with open(
+        os.path.join(
+            args.output,
+            "response_{}_{}.txt".format(os.path.basename(file), response_count),
+        ),
+        "w",
+    ) as f:
         f.write(resp.message.content)
     # if args.debug:
     #    print(resp.message.content)
@@ -333,16 +646,110 @@ def process_response(resp, file: str, args, response_count: int):
     if "```" not in resp.message.content:
         print("Skipping output {} due to missing concrete patch".format(response_count))
         return ("failed", file, None)
-    patched_file = resp.message.content.split("```")[1]
-    if args.language and patched_file.startswith(args.language):
+    patched_file: str = resp.message.content.split("```")[1]
+
+    first_line = patched_file[: patched_file.index("\n") + 1].lower()
+    if args.language and first_line.startswith(args.language):
         patched_file = patched_file[len(args.language) :]
     if patched_file.startswith("\n"):
         patched_file = patched_file[1:]
     with open(patched_path, "w") as f:
         f.write(patched_file)
-    return evaluate_patched_file(args,patched_path,patched_file,response_count,file)
+    return evaluate_patched_file(args, patched_path, patched_file, response_count, file)
 
-def evaluate_patched_file(args,patched_path,patched_file,i,file):
+
+def process_response_context(resp, file: str, args, response_count: int, **kwargs):
+    with open(
+        os.path.join(
+            args.output,
+            "response_{}_{}.txt".format(os.path.basename(file), response_count),
+        ),
+        "w",
+    ) as f:
+        f.write(resp.message.content)
+
+    patched_context_path = os.path.join(
+        args.output,
+        "patched_context_{}_{}".format(response_count, os.path.basename(file)),
+    )
+
+    patched_path = os.path.join(
+        args.output, "patched_{}_{}".format(response_count, os.path.basename(file))
+    )
+
+    if "```" not in resp.message.content:
+        print("Skipping output {} due to missing concrete patch".format(response_count))
+        return ("failed", file, None)
+    patched_context: str = resp.message.content.split("```")[1]
+
+    first_line = patched_context[: patched_context.index("\n") + 1].lower()
+    if args.language and first_line.startswith(args.language):
+        patched_context = patched_context[len(args.language) :]
+    if patched_context.startswith("\n"):
+        patched_context = patched_context[1:]
+
+    with open(patched_context_path, "w") as f:
+        f.write(patched_context)
+
+    with open(file, "r") as f:
+        lines = f.readlines()
+        context_size = args.context
+
+        faulty_line = kwargs["lines"][kwargs["instance"]]
+
+        bad_range = set(
+            range(
+                max(0, faulty_line - context_size),
+                min(len(lines), faulty_line + context_size),
+            )
+        )
+
+        for i in range(len(lines)):
+            if i in bad_range:
+                lines[i] = ""
+            else:
+                lines[i] = lines[i].rstrip()
+
+        lines[max(0, faulty_line - context_size)] = patched_context + "\n"
+
+        patched_file = "\n".join(lines)
+
+    with open(patched_path, "w") as f:
+        f.write(patched_file)
+
+    return evaluate_patched_file(args, patched_path, patched_file, response_count, file)
+
+
+def process_response_chunked(resp, file: str, args, response_count: int, **kwargs):
+    with open(
+        os.path.join(
+            args.output,
+            "response_{}_{}.txt".format(os.path.basename(file), response_count),
+        ),
+        "w",
+    ) as f:
+        f.write(resp.message.content)
+    # if args.debug:
+    #    print(resp.message.content)
+    patched_path = os.path.join(
+        args.output, "patched_{}_{}".format(response_count, os.path.basename(file))
+    )
+    if "```" not in resp.message.content:
+        print("Skipping output {} due to missing concrete patch".format(response_count))
+        return ("failed", file, None)
+    patched_file: str = resp.message.content.split("```")[1]
+
+    first_line = patched_file[: patched_file.index("\n") + 1].lower()
+    if args.language and first_line.startswith(args.language):
+        patched_file = patched_file[len(args.language) :]
+    if patched_file.startswith("\n"):
+        patched_file = patched_file[1:]
+    with open(patched_path, "w") as f:
+        f.write(patched_file)
+    return evaluate_patched_file(args, patched_path, patched_file, response_count, file)
+
+
+def evaluate_patched_file(args, patched_path, patched_file, i, file):
     with open(file, "w") as f:
         f.write(patched_file)
     built = False
@@ -409,7 +816,7 @@ def do_fault_localization_py(args):
                     path, line_and_probability = line.split("::")
                     line, _ = line_and_probability.split(",")
                     distribution[path] = distribution.get(path, []) + [line]
-                return process_fault_localization(args, distribution)
+                return process_fault_localization(distribution)
     raise Exception("No fault localization report found")
 
 
@@ -496,7 +903,7 @@ def do_fault_localization_c(args):
             path, line_and_prob = line.split(":")
             line, _ = line_and_prob.split(",")
             distribution[path] = distribution.get(path, []) + [line]
-        return process_fault_localization(args, distribution)
+        return process_fault_localization(distribution)
 
 
 def do_fault_localization_java(args):
@@ -518,7 +925,7 @@ def do_fault_localization_java(args):
                 path.replace(".", "/") + ".java",
             )
             distribution[path] = distribution.get(path, []) + [line]
-        return process_fault_localization(args, distribution)
+        return process_fault_localization(distribution)
 
 
 def fault_localization(args):
@@ -536,25 +943,11 @@ def fault_localization(args):
 
 
 def process_fault_localization(
-    args, fault_localization_distribution: Dict[str, List[Union[str, int]]]
-) -> List[Tuple[str, str, List[int]]]:
+    fault_localization_distribution: Dict[str, List[Union[str, int]]]
+) -> List[Tuple[str, List[int]]]:
     distribution_converted = []
     for k, v in fault_localization_distribution.items():
-        if args.lines:
-            with open(k) as f:
-                lines = f.readlines()
-                distribution_converted.append(
-                    (
-                        k,
-                        "in any of the lines in the list [{}]".format(
-                            ",".join(list(map(lambda x: lines[int(x) - 1], v)))
-                        ),
-                    )
-                )
-        else:
-            distribution_converted.append(
-                (k, "in any of the lines in the list {}".format(",".join(v)))
-            )
+        distribution_converted.append((k, list(map(int, v))))
     return distribution_converted
 
 
@@ -581,9 +974,12 @@ def get_bug_info(args):
             line, _ = line_and_probability.split(",")
             distribution[path] = distribution.get(path, []) + [line]
 
-        return process_fault_localization(args, distribution)
+        return process_fault_localization(distribution)
     elif args.file:
-        return cast(List[Tuple[str, str]], [(args.file, "in the file ")])
+        if args.context > 0:
+            print("Context window is non-zero but only info provided is file")
+            exit(1)
+        return cast(List[Tuple[str, List[int]]], [(args.file, [])])
     else:
         print(
             "Please provide a way to find the file to repair - either fault localization (manual, provided) or file path"
@@ -598,20 +994,25 @@ if __name__ == "__main__":
     os.makedirs(os.path.join(args.output, "patches"), exist_ok=True)
 
     if args.file and not os.path.exists(args.file):
-        print("File {} does not exist, yet it is passed as the target".format(args.file))
+        print(
+            "File {} does not exist, yet it is passed as the target".format(args.file)
+        )
         sys.exit(1)
 
     cases = get_bug_info(args)
 
-    patches = []
+    patches: List[Tuple[int, str, str]] = []
 
-    for file_path, fault_info in cases:
-        for patch in repair(args, file_path, fault_info):
+    for file_path, faulty_lines in cases:
+        for patch in repair(args, file_path, faulty_lines):
             transformed_patch = (conversion_table[patch[0]], *patch[1:])
             heapq.heappush(patches, transformed_patch)
 
-    for i in range(min(args.top, len(patches))):
+    patch_index = 0
+    for _ in range(min(args.top, len(patches))):
         (priority, file, patched_path) = heapq.heappop(patches)
         if patched_path is None:
             break
-        make_patch(args, file, patched_path, i)
+        if not args.only_plausible or priority == conversion_table["plausible"]:
+            make_patch(args, file, patched_path, patch_index)
+            patch_index = patch_index + 1
