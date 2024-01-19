@@ -21,6 +21,7 @@ MAX_TOKENS = 4096
 MAX_NON_CHUNKED_LENGTH = 4000
 file_error_log = "error.logs"
 
+# KEY IS REVOKED
 client = OpenAI(api_key="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")
 from pprint import pprint
 
