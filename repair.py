@@ -21,8 +21,10 @@ MAX_TOKENS = 4096
 MAX_NON_CHUNKED_LENGTH = 4000
 file_error_log = "error.logs"
 
-# KEY IS REVOKED
-client = OpenAI(api_key="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")
+def get_client(key:str):
+    client = OpenAI(api_key=key)
+    return client
+
 from pprint import pprint
 
 SINGLE_PROMPT = """
@@ -60,6 +62,7 @@ def send_prompt_single(
     args,
     text: str,
     model: str,
+    key="",
     num=1,
     temperature=0.8,
     reference=None,
@@ -101,7 +104,7 @@ def send_prompt_single(
         with open(join(args.output, "prompt_{}.json".format(prompt_number)), "w") as f:
             json.dump(messages, f, indent=4)
 
-    return client.chat.completions.create(
+    return get_client(key).chat.completions.create(
         model=model,
         messages=messages,
         temperature=temperature,
@@ -116,6 +119,7 @@ def send_prompt_chunked(
     text: str,
     model: str,
     num=1,
+    key="",
     temperature=0.8,
     reference=None,
     bug_description=None,
@@ -190,7 +194,7 @@ def send_prompt_chunked(
         with open(join(args.output, "prompt_{}.json".format(prompt_number)), "w") as f:
             json.dump(messages, f, indent=4)
 
-    return client.chat.completions.create(
+    return get_client(key).chat.completions.create(
         model=model,
         messages=messages,
         temperature=temperature,
@@ -205,6 +209,7 @@ def send_prompt_context(
     text: str,
     model: str,
     num=1,
+    key="",
     temperature=0.8,
     reference=None,
     bug_description=None,
@@ -251,7 +256,7 @@ def send_prompt_context(
         with open(join(args.output, "prompt_{}.json".format(prompt_number)), "w") as f:
             json.dump(messages, f, indent=4)
 
-    return client.chat.completions.create(
+    return get_client(key).chat.completions.create(
         model=model,
         messages=messages,
         temperature=temperature,
@@ -352,7 +357,16 @@ def parse_args():
         "-fl-data", help="Path of fautl localization data", type=argparse.FileType("r")
     )
 
+
     optional = parser.add_argument_group("Arguments")
+    optional.add_argument(
+        "-key",
+        help="OpenAI key. Preferably use OPEN_AI_KEY environment variable",
+        type=str,
+        required=False,
+        default=""
+    )
+    
     optional.add_argument(
         "-iterations",
         help="Amount of iterations for a self-consistency check",
@@ -588,6 +602,7 @@ def repair(
                     program=program,
                     fault_info=fault_info,
                 ),
+                key = args.key or os.environ.get("OPEN_AI_KEY","")
                 num=args.patches,
                 model=args.model,
                 reference=reference_contents,
