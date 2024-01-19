@@ -21,9 +21,11 @@ MAX_TOKENS = 4096
 MAX_NON_CHUNKED_LENGTH = 4000
 file_error_log = "error.logs"
 
-def get_client(key:str):
+
+def get_client(key: str):
     client = OpenAI(api_key=key)
     return client
+
 
 from pprint import pprint
 
@@ -357,16 +359,15 @@ def parse_args():
         "-fl-data", help="Path of fautl localization data", type=argparse.FileType("r")
     )
 
-
     optional = parser.add_argument_group("Arguments")
     optional.add_argument(
         "-key",
         help="OpenAI key. Preferably use OPEN_AI_KEY environment variable",
         type=str,
         required=False,
-        default=""
+        default="",
     )
-    
+
     optional.add_argument(
         "-iterations",
         help="Amount of iterations for a self-consistency check",
@@ -602,7 +603,7 @@ def repair(
                     program=program,
                     fault_info=fault_info,
                 ),
-                key = args.key or os.environ.get("OPEN_AI_KEY","")
+                key=args.key or os.environ.get("OPEN_AI_KEY", ""),
                 num=args.patches,
                 model=args.model,
                 reference=reference_contents,
