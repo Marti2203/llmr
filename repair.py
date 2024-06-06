@@ -15,17 +15,20 @@ from typing import Tuple
 from typing import Union
 
 import rich
+from litellm import litellm as llm
 from openai import OpenAI
+
+llm.drop_params = True
 
 MAX_TOKENS = 4096
 MAX_NON_CHUNKED_LENGTH = 4000
 file_error_log = "error.logs"
 
-
+'''
 def get_client(key: str):
     client = OpenAI(api_key=key)
     return client
-
+'''
 
 from pprint import pprint
 
@@ -106,13 +109,14 @@ def send_prompt_single(
         with open(join(args.output, "prompt_{}.json".format(prompt_number)), "w") as f:
             json.dump(messages, f, indent=4)
 
-    return get_client(key).chat.completions.create(
+    return llm.completion(
         model=model,
         messages=messages,
         temperature=temperature,
         max_tokens=MAX_TOKENS,
         top_p=1.0,
         n=num,
+        api_key=key,
     )
 
 
@@ -196,13 +200,14 @@ def send_prompt_chunked(
         with open(join(args.output, "prompt_{}.json".format(prompt_number)), "w") as f:
             json.dump(messages, f, indent=4)
 
-    return get_client(key).chat.completions.create(
+    return llm.completion(
         model=model,
         messages=messages,
         temperature=temperature,
         max_tokens=MAX_TOKENS,
         top_p=1.0,
         n=num,
+        api_key=key
     )
 
 
@@ -258,13 +263,14 @@ def send_prompt_context(
         with open(join(args.output, "prompt_{}.json".format(prompt_number)), "w") as f:
             json.dump(messages, f, indent=4)
 
-    return get_client(key).chat.completions.create(
+    return llm.completion(
         model=model,
         messages=messages,
         temperature=temperature,
         max_tokens=MAX_TOKENS,
         top_p=1.0,
         n=num,
+        api_key=key,
     )
 
 
@@ -298,7 +304,7 @@ def build(build_script, debug=False):
 
 def test(test_script, args=None, debug=False, env=dict()):
     res = execute_command(
-        test_script + " " + args if args is not None else " ",
+        "bash " + test_script + " " + args if args is not None else " ",
         show_output=debug,
         env=env,
     )
@@ -903,8 +909,8 @@ def do_fault_localization_c(args):
             )
 
     if (
-        os.listdir(join(args.output, "passing_traces")) == 0
-        and os.listdir(join(args.output, "failing_traces")) == 0
+        len(os.listdir(join(args.output, "passing_traces"))) == 0
+        and len(os.listdir(join(args.output, "failing_traces"))) == 0
     ):
         print("No traces were generated")
         exit(1)
@@ -944,6 +950,19 @@ def do_fault_localization_java(args):
             distribution[path] = distribution.get(path, []) + [line]
         return process_fault_localization(distribution)
 
+'''
+def do_fault_localization_javascript(args):
+    coverage_path = join(args.project_path, "coverage", "coverage.json")
+    test_results_path = join(args.project_path, "test_results.json")
+
+    # Check if pre-existing coverage & test-result exist
+    if os.path.exists(coverage_path) and os.path.exists(test_results_path):
+        # Read both files
+        with open(coverage_path) as coverage_file, open(test_results_path) as test_results_file:
+            coverage_content = json.load(coverage_file)
+            json_content = json.load(test_results_file)
+    pass
+'''
 
 def fault_localization(args):
     if args.language.startswith("py"):

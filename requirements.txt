@@ -1,4 +1,4 @@
-requests==2.28.2
+requests<3.0.0
 openai
 rich
 pytest
@@ -7,3 +7,4 @@ fauxpy
 polars
 matplotlib
 pandas
+litellm==1.40.2
