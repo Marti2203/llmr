@@ -69,7 +69,7 @@ def send_prompt_single(
     model: str,
     key="",
     num=1,
-    temperature=0.8,
+    temperature= os.getenv('TEMPERATURE',0.8),
     reference=None,
     bug_description=None,
     lines=None,
@@ -109,15 +109,31 @@ def send_prompt_single(
         with open(join(args.output, "prompt_{}.json".format(prompt_number)), "w") as f:
             json.dump(messages, f, indent=4)
 
-    return llm.completion(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=MAX_TOKENS,
-        top_p=1.0,
-        n=num,
-        api_key=key,
-    )
+    
+    
+    choices = [] 
+    
+    if model.startswith("gpt"):
+        choices = llm.completion(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=MAX_TOKENS,
+            top_p=1.0,
+            n=num if model.startswith("gpt") else None,
+            api_key=key,
+        ).choices
+    else:
+        for _ in range(num):
+            choices.append(llm.completion(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=MAX_TOKENS,
+                top_p=1.0,
+                api_key=key,
+            ).choices[0])
+    return choices
 
 
 def send_prompt_chunked(
@@ -296,6 +312,33 @@ def execute_command(command: str, show_output=True, env=dict(), directory=None):
     # out is the output of the command, and err is the exit value
     return int(process.returncode)
 
+def execute_command_output(command: str, show_output=True, env=dict(), directory=None):
+    # Print executed command and execute it in console
+    command = command.encode().decode("ascii", "ignore")
+    if not directory:
+        directory = os.getcwd()
+    print_command = "[{}] {}".format(directory, command)
+    print("Executing ", print_command)
+    command = "{{ {} ;}} 2> {}".format(command, file_error_log)
+    if not show_output:
+        command += " > /dev/null"
+    # print(command)
+    new_env = os.environ.copy()
+    new_env.update(env)
+    process = subprocess.Popen(
+        [command], stdout=subprocess.PIPE, shell=True, env=new_env, cwd=directory
+    )
+    (output, error) = process.communicate()
+    if output:
+        output = output.decode()
+    if error:
+        error = error.decode()
+
+    if show_output:
+        print(output)
+    # out is the output of the command, and err is the exit value
+    return int(process.returncode), output,error
+
 
 def build(build_script, debug=False):
     res = execute_command(build_script, show_output=debug)
@@ -303,12 +346,12 @@ def build(build_script, debug=False):
 
 
 def test(test_script, args=None, debug=False, env=dict()):
-    res = execute_command(
+    res, out,err = execute_command_output(
         "bash " + test_script + " " + args if args is not None else " ",
         show_output=debug,
         env=env,
     )
-    return res == 0
+    return res == 0, out, err
 
 
 def apply_patch(file, patch_path):
@@ -387,7 +430,7 @@ def parse_args():
         help="OpenAI model to be used",
         type=str,
         required=False,
-        default="gpt-4-32k",
+        default="gpt-4o",
     )
 
     optional.add_argument(
@@ -614,7 +657,7 @@ def repair(
                 model=args.model,
                 reference=reference_contents,
                 bug_description=description_contents,
-            ).choices
+            )
             for resp in response:
                 print("\n\nProcessing response {}\n\n".format(response_count))
                 try:
@@ -672,7 +715,7 @@ def process_response_single(resp, file: str, args, response_count: int, **kwargs
     patched_file: str = resp.message.content.split("```")[1]
 
     first_line = patched_file[: patched_file.index("\n") + 1].lower()
-    if args.language and first_line.startswith(args.language):
+    if args.language and first_line.lower().startswith(args.language.lower()):
         patched_file = patched_file[len(args.language) :]
     if patched_file.startswith("\n"):
         patched_file = patched_file[1:]
@@ -795,13 +838,13 @@ def evaluate_patched_file(args, patched_path, patched_file, i, file):
                 *args.failing_tests.split(","),
             ]:
                 if test_id:
-                    if not test(args.test, test_id, args.debug):
+                    if not test(args.test, test_id, args.debug)[0]:
                         print("Patch {} failed for test {}".format(i, test_id))
                         shutil.copy(patched_path, patched_path + "_implausible")
                         plausible = False
                         return ("implausible", file, patched_path)
         else:
-            if not test(args.test, None, args.debug):
+            if not test(args.test, None, args.debug)[0]:
                 print("Patch {} failed test script".format(i))
                 plausible = False
                 shutil.copy(patched_path, patched_path + "_implausible")
