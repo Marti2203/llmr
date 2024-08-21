@@ -7,4 +7,4 @@ fauxpy
 polars
 matplotlib
 pandas
-litellm==1.40.2
+litellm==1.43.19
